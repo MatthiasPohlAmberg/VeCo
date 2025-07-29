@@ -1,8 +1,9 @@
 echo ================================
 echo Activating virtual environment
 echo ================================
+set VENV_DIR=.venv
 
-call %VENV_DIR%\Scripts\activate.bat
+%VENV_DIR%\Scripts\activate.bat
 
 echo ================================
 echo Running VeCo
