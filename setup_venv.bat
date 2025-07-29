@@ -37,14 +37,16 @@ echo ================================
 call %VENV_DIR%\Scripts\activate.bat
 
 echo ================================
-echo Update pip & install packages
+echo Update pip and install packages
 echo ================================
 
 py -m pip install --upgrade pip
+
+cd /d "%~dp0"
 IF EXIST requirements.txt (
     pip install -r requirements.txt
 ) ELSE (
-    echo [WARN] No requirements.txt found – skipping paketinstallation.
+    echo [WARN] No requirements.txt found - skipping pakage installation.
 )
 
 echo ================================
