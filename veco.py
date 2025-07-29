@@ -1,8 +1,6 @@
-import os
 import torch
 import time
 import logging
-from typing import Union
 import whisper
 from faiss import IndexFlatL2, IndexIDMap
 import pdfplumber
@@ -352,7 +350,7 @@ class Vectorize:
 if __name__ == "__main__":
     veco = Vectorize()
     outputdb = []  # Example database
-    veco.vectorize(outputdb, "Vorstellung_ams_Final.mp3", use_compression=False)
+    veco.vectorize(outputdb, "Vectorizing_the_Company.pdf", use_compression=False)
     print(outputdb)
     """
     # Example for FAISS retrieval
