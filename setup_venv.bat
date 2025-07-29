@@ -4,55 +4,50 @@ REM Setup-Skript für virtuelle Umgebung
 REM ====================================
 
 set VENV_DIR=.venv
+
 echo ================================
-echo Pruefe Python 3.11-Verfügbarkeit
+echo Check python 3.10 version
 echo ================================
 
-REM Prüft ob python3.11 im PATH ist
-where python3.11 >nul 2>nul
+REM Prüft, ob Python 3.10 verfügbar ist
+where py >nul 2>nul
 IF %ERRORLEVEL% NEQ 0 (
-    echo [FEHLER] Python 3.11 wurde nicht gefunden. Bitte installiere es zuerst.
+    echo [ERROR] Python Launcher 'py' not found. Please install Python 3.10 on your local system.
     exit /b 1
 )
 
 REM Gibt die Version zur Kontrolle aus
-echo [INFO] Gefundene Python-Version:
-python3.11 --version
+py -3.10 --version
 
 echo ================================
-echo Erstelle virtuelle Umgebung
+echo Creating virtual environment
 echo ================================
 
-REM Erstellen der virtuellen Umgebung
-python3.11 -m venv %VENV_DIR%
+REM Erstelle virtuelle Umgebung mit Python 3.10
+py -3.10 -m venv %VENV_DIR%
 IF %ERRORLEVEL% NEQ 0 (
-    echo [FEHLER] Erstellung der Umgebung ist fehlgeschlagen.
+    echo [ERROR] Creating virtual environment failed.
     exit /b 1
 )
 
 echo ================================
-echo Aktiviere virtuelle Umgebung
+echo Activating virtual environment
 echo ================================
 
-IF EXIST %VENV_DIR%\Scripts\activate.bat (
-    call %VENV_DIR%\Scripts\activate.bat
-) ELSE (
-    echo [FEHLER] Aktivierung fehlgeschlagen – Datei nicht gefunden.
-    exit /b 1
-)
+call %VENV_DIR%\Scripts\activate.bat
 
 echo ================================
-echo Aktualisiere pip & installiere Pakete
+echo Update pip & install packages
 echo ================================
 
-pip install --upgrade pip
+py -m pip install --upgrade pip
 IF EXIST requirements.txt (
     pip install -r requirements.txt
 ) ELSE (
-    echo [WARNUNG] Keine requirements.txt gefunden – überspringe Paketinstallation.
+    echo [WARN] No requirements.txt found – skipping paketinstallation.
 )
 
 echo ================================
-echo Installation abgeschlossen.
+echo Installation complete.
 echo ================================
 pause
