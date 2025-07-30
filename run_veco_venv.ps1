@@ -1,3 +1,3 @@
 # Aktiviert die Umgebung
 .venv\Scripts\Activate.ps1
-py veco.py
+py veco_test.py

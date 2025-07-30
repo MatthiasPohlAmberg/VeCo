@@ -13,7 +13,7 @@ except FileNotFoundError:
     print("Keine bestehende Datenbank gefunden. Neue wird erstellt.")
 
 # 3. Verzeichnisschleife: Vektorisieren und ergänzen
-folder = Path("dein/pfad/zum/ordner")
+folder = Path("test_data")
 for file in folder.iterdir():
     if file.is_file():
         try:
