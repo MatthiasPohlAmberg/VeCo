@@ -1,8 +1,0 @@
-Import veco as v
-
-v.vectorize(db,inputfile, datatype="jpg", use_compression=True)
-
-Frontend maximal einfach => Backend maximale flexibel
-
-
-markdown file hinzufügen
