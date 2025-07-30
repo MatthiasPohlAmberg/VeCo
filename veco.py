@@ -4,13 +4,21 @@ import logging
 import whisper
 from faiss import IndexFlatL2, IndexIDMap
 import pdfplumber
-import base64
 import ollama
 from pathlib import Path
 import sys
 import threading
-from sentence_transformers import SentenceTransformer
+import json
+import pickle
 import numpy as np
+import pytesseract
+from PIL import Image
+from docx import Document
+from pptx import Presentation
+from moviepy import VideoFileClip
+import tempfile
+import os
+from sentence_transformers import SentenceTransformer
 
 # Logger configuration
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -38,325 +46,227 @@ class Spinner:
     def stop(self):
         self.stop_running = True
         self.thread.join()
-        sys.stdout.write(f"\r{self.message}... done!")
+        sys.stdout.write(f"\r{self.message}... done!\n")
         sys.stdout.flush()
 
 class Vectorize:
-    def __init__(self):
+    def __init__(self, default_model="gemma3:12b"):
+        self.default_model = default_model
+        self.outputdb = []
+        self.chunks = []
         spinner = Spinner("Initializing models")
         spinner.start()
         try:
-            # Initialize models
             start_time = time.time()
-            # Check if CUDA is available
-            if torch.cuda.is_available():
-                logger.info(f"CUDA is available")
-                logger.info(f"Device count: {torch.cuda.device_count()}")
-                logger.info(f"Current device: {torch.cuda.current_device()}")
-                logger.info(f"Device name: {torch.cuda.get_device_name(torch.cuda.current_device())}")
-            else:
-                logger.info("CUDA is NOT available :(")
-            
-            # Patch for torch.load to enforce weights_only=False (if needed)
-            orig_load = torch.load
-            def patch_load(*args, **kwargs):
-                if "weights_only" not in kwargs:
-                    kwargs["weights_only"] = False
-                return orig_load(*args, **kwargs)
-            torch.load = patch_load
-            # Select device
             device = "cuda" if torch.cuda.is_available() else "cpu"
-            self.whisper_model = whisper.load_model("turbo", device=device)
+            self.whisper_model = whisper.load_model("base", device=device)
             self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
             embedding_dim = self.embedder.get_sentence_embedding_dimension()
-            self.faiss_index = IndexIDMap(IndexFlatL2(embedding_dim))  # Use IndexIDMap for dynamic IDs
-            end_time = time.time()
-            logger.info(f"Models initialized in {end_time - start_time:.2f} seconds.")
+            self.faiss_index = IndexIDMap(IndexFlatL2(embedding_dim))
+            self.check_ollama_models()
+            logger.info(f"Models initialized in {time.time() - start_time:.2f} seconds.")
         finally:
             spinner.stop()
 
-    def vectorize(self, outputdb, inputfile, use_compression=False):
-        """
-        Automatically detect input type and process it.
-        :param outputdb: Database for output vectors
-        :param inputfile: Input file
-        :param use_compression: Whether to use an LLM for compression
-        """
+    def check_ollama_models(self):
+        try:
+            models = ollama.list()["models"]
+            if not models:
+                logger.warning("No models found in Ollama. Compression will be disabled.")
+                self.use_compression = False
+            else:
+                self.use_compression = True
+                logger.info(f"Ollama models available: {[m['name'] for m in models]}")
+        except Exception as e:
+            logger.warning(f"Ollama model check failed: {e}. Compression will be disabled.")
+            self.use_compression = False
+
+    def detect_input_type(self, inputfile):
+        ext = Path(inputfile).suffix.lower()
+        if ext in [".txt", ".pdf", ".doc", ".docx"]:
+            return "text" if ext == ".txt" else "pdf" if ext == ".pdf" else "word"
+        elif ext == ".pptx":
+            return "pptx"
+        elif ext in [".jpg", ".jpeg", ".png"]:
+            return "image"
+        elif ext in [".mp3", ".wav"]:
+            return "audio"
+        elif ext in [".mp4", ".avi", ".mov", ".mkv"]:
+            return "video"
+        else:
+            raise ValueError(f"Unsupported file type: {ext}")
+
+    def vectorize(self, inputfile, **kwargs):
+        use_compression = kwargs.get("use_compression", False)
+        model = kwargs.get("model", self.default_model)
         spinner = Spinner("Vectorizing input")
         spinner.start()
         try:
-            start_time = time.time()
-            try:
-                input_type = self.detect_input_type(inputfile)
-                logger.info(f"Input type detected: {input_type}")
+            input_type = self.detect_input_type(inputfile)
+            logger.info(f"Detected input type: {input_type}")
+            selected_model = model if model else self.default_model
 
-                if input_type in ["text", "pdf", "word"]:
-                    raw_text = self.extract_text(inputfile, input_type)
-                    logger.info(f"Extracted text: {raw_text}")  # Log the extracted text
-                    if use_compression:
-                        compressed_text = self.ask_gemma(self.build_compression_prompt(raw_text))
-                        vector = self.vectorize_text(compressed_text)
-                    else:
-                        vector = self.vectorize_text(raw_text)
-                    outputdb.append(vector)
-                elif input_type == "image":
-                    if use_compression:
-                        prompt = self.build_image_interpretation_prompt(inputfile)
-                        interpreted_data = self.ask_gemma(prompt)
-                        vector = self.vectorize_text(interpreted_data)
-                    else:
-                        raw_text = self.extract_text_from_image(inputfile)
-                        logger.info(f"Extracted text: {raw_text}")  # Log the extracted text
-                        vector = self.vectorize_text(raw_text)
-                    outputdb.append(vector)
-                elif input_type == "audio":
-                    raw_text = self.extract_text_from_audio(inputfile)
-                    logger.info(f"Extracted text: {raw_text}")
-                # ToDo type Video
-                # ToDo type Excel
-                else:
-                    logger.warning(f"Unsupported input type: {input_type}. Routine läuft weiter.")
-            except ValueError as e:
-                logger.warning(f"Error: {e}. Next file or end.")
-            end_time = time.time()
-            logger.info(f"Processing completed in {end_time - start_time:.2f} seconds.")
-        finally:
-            spinner.stop()
-
-    def detect_input_type(self, inputfile):
-        """
-        Detect the input type based on file extension.
-        """
-        spinner = Spinner("Detecting input type")
-        spinner.start()
-        try:
-            start_time = time.time()
-            ext = Path(inputfile).suffix.lower()
-            if ext in [".txt", ".pdf", ".doc", ".docx"]:
-                input_type = "text" if ext == ".txt" else "pdf" if ext == ".pdf" else "word"
-            elif ext in [".jpg", ".jpeg", ".png"]:
-                input_type = "image"
-            elif ext in [".mp3", ".wav"]:
-                input_type = "audio"
-            elif ext in [".mp4", ".avi"]:
-                input_type = "video"
+            if input_type in ["text", "pdf", "word", "pptx"]:
+                raw_text = self.extract_text(inputfile, input_type)
+            elif input_type == "image":
+                raw_text = self.extract_text_from_image(inputfile)
+            elif input_type == "audio":
+                raw_text = self.extract_text_from_audio(inputfile)
+            elif input_type == "video":
+                raw_text = self.extract_text_from_video(inputfile)
             else:
-                raise ValueError(f"Unsupported file type: {ext}")
-            end_time = time.time()
-            logger.info(f"Input type detection completed in {end_time - start_time:.2f} seconds.")
-            return input_type
+                raw_text = ""
+
+            if use_compression:
+                compressed_text = self.ask_llm(self.build_compression_prompt(raw_text), selected_model)
+                text_for_output = compressed_text
+            else:
+                text_for_output = raw_text
+
+            vector = self.vectorize_text(text_for_output)
+
+            self.outputdb.append({
+                "id": len(self.outputdb),
+                "vector": vector.tolist(),
+                "text": text_for_output,
+                "source": str(inputfile)
+            })
         finally:
             spinner.stop()
 
     def extract_text(self, inputfile, input_type):
-        """
-        Extract text based on the input type.
-        """
-        spinner = Spinner("Extracting text")
-        spinner.start()
-        try:
-            start_time = time.time()
-            if input_type == "text":
-                text = Path(inputfile).read_text(encoding="utf-8")
-            elif input_type == "pdf":
-                text = self.extract_text_from_pdf(inputfile)
-            elif input_type == "word":
-                text = self.extract_text_from_word(inputfile)
-            else:
-                raise ValueError(f"Unsupported input type for text extraction: {input_type}")
-            end_time = time.time()
-            logger.info(f"Text extraction completed in {end_time - start_time:.2f} seconds.")
-            return text
-        finally:
-            spinner.stop()
-
-    def extract_text_from_pdf(self, filepath):
-        """Extract text from PDF files."""
-        spinner = Spinner("Extracting text from PDF")
-        spinner.start()
-        try:
-            start_time = time.time()
+        if input_type == "text":
+            return Path(inputfile).read_text(encoding="utf-8")
+        elif input_type == "pdf":
             text = ""
-            with pdfplumber.open(filepath) as pdf:
+            with pdfplumber.open(inputfile) as pdf:
                 for page in pdf.pages:
                     page_text = page.extract_text()
                     if page_text:
-                        text += page_text + ""
-            end_time = time.time()
-            logger.info(f"PDF text extraction completed in {end_time - start_time:.2f} seconds.")
+                        text += page_text + "\n"
             return text
-        finally:
-            spinner.stop()
-
-    def extract_text_from_word(self, filepath):
-        """Dummy function for extracting text from Word documents."""
-        spinner = Spinner("Extracting text from Word document")
-        spinner.start()
-        try:
-            start_time = time.time()
-            text = "Word document content"  # Implementation required
-            end_time = time.time()
-            logger.info(f"Word text extraction completed in {end_time - start_time:.2f} seconds.")
+        elif input_type == "word":
+            doc = Document(inputfile)
+            return "\n".join([para.text for para in doc.paragraphs])
+        elif input_type == "pptx":
+            presentation = Presentation(inputfile)
+            text = ""
+            for slide in presentation.slides:
+                for shape in slide.shapes:
+                    if hasattr(shape, "text"):
+                        text += shape.text + "\n"
             return text
-        finally:
-            spinner.stop()
+        else:
+            return ""
 
     def extract_text_from_image(self, image_path):
-        """Dummy function for extracting text from images."""
-        spinner = Spinner("Extracting text from image")
-        spinner.start()
         try:
-            start_time = time.time()
-            text = "OCR text from image"  # Implementation required
-            end_time = time.time()
-            logger.info(f"Image text extraction completed in {end_time - start_time:.2f} seconds.")
-            return text
-        finally:
-            spinner.stop()
-
-    def build_compression_prompt(self, raw_text):
-        """
-        Create a prompt for compression using an LLM.
-        """
-        spinner = Spinner("Building compression prompt")
-        spinner.start()
-        try:
-            start_time = time.time()
-            prompt = f"Please compress the following text: {raw_text} "
-            end_time = time.time()
-            logger.info(f"Compression prompt created in {end_time - start_time:.2f} seconds.")
-            return prompt
-        finally:
-            spinner.stop()
+            image = Image.open(image_path)
+            return pytesseract.image_to_string(image, lang="deu")
+        except Exception as e:
+            logger.error(f"OCR failed: {e}")
+            return ""
 
     def extract_text_from_audio(self, audio_path):
-        """
-        Extract text from audio files using Whisper.
-        """
-        spinner = Spinner("Extracting text from audio")
+        result = self.whisper_model.transcribe(audio_path, language="de")
+        return result["text"]
+
+    def extract_text_from_video(self, video_path):
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_audio:
+                video = VideoFileClip(video_path)
+                video.audio.write_audiofile(tmp_audio.name, logger=None)
+                text = self.extract_text_from_audio(tmp_audio.name)
+            os.remove(tmp_audio.name)
+            return text
+        except Exception as e:
+            logger.error(f"Video processing failed: {e}")
+            return ""
+
+    def vectorize_text(self, text):
+        vector = self.embedder.encode([text], convert_to_numpy=True)
+        ids = np.arange(vector.shape[0])
+        self.faiss_index.add_with_ids(vector, ids)
+        return vector
+
+    def build_compression_prompt(self, raw_text):
+        return f"Please compress the following text:\n\n{raw_text}"
+
+    def ask_llm(self, prompt, model):
+        messages = [{"role": "user", "content": prompt}]
+        try:
+            response = ollama.chat(model=model, messages=messages)
+            content = response.get("message", {}).get("content", "")
+            if not content:
+                logger.warning("LLM returned empty response.")
+            return content
+        except Exception as e:
+            logger.error(f"LLM interaction failed: {e}")
+            return ""
+
+    def retrieve_context(self, query: str, top_k=5):
+        q_embed = self.embedder.encode([query], convert_to_numpy=True)
+        D, I = self.faiss_index.search(q_embed, top_k)
+        context_passages = []
+        for idx in I[0]:
+            if 0 <= idx < len(self.outputdb):
+                context_passages.append(self.outputdb[idx]["text"])
+        return "\n\n".join(context_passages)
+
+    def query_with_context(self, question: str, model=None, top_k=5):
+        selected_model = model if model else self.default_model
+        context = self.retrieve_context(question, top_k)
+
+        prompt = f"""Use the following context to answer the question.
+            Context:
+            {context}
+            Question:
+            {question}
+            Answer:"""
+
+        spinner = Spinner("Asking LLM via Ollama")
         spinner.start()
         try:
-            start_time = time.time()
-            result = self.whisper_model.transcribe(audio_path, language="de")
-            text = result["text"]
-            end_time = time.time()
-            logger.info(f"Audio transcription completed in {end_time - start_time:.2f} seconds.")
-            return text
+            response = self.ask_llm(prompt, selected_model)
+            return response
         finally:
             spinner.stop()
     
-    def build_image_interpretation_prompt(self, image_path):
-        """
-        Create a prompt for image interpretation using an LLM.
-        """
-        spinner = Spinner("Building image interpretation prompt")
-        spinner.start()
-        try:
-            start_time = time.time()
-            encoded_image = self.encode_image_base64(image_path)
-            prompt = f"Please interpret the content of this image:{encoded_image}"
-            end_time = time.time()
-            logger.info(f"Image interpretation prompt created in {end_time - start_time:.2f} seconds.")
-            return prompt
-        finally:
-            spinner.stop()
+    def save_database(self, filepath, format="json"):
+        data = {
+            "outputdb": self.outputdb
+        }
+        if format == "json":
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+        elif format == "pickle":
+            with open(filepath, "wb") as f:
+                pickle.dump(data, f)
+        else:
+            raise ValueError(f"Unsupported format: {format}")
 
-    def ask_gemma(self, prompt):
-        """
-        Communicate with the LLM model.
-        """
-        spinner = Spinner("Communicating with LLM")
-        spinner.start()
-        try:
-            start_time = time.time()
-            messages = [{"role": "user", "content": prompt}]
-            response = ollama.chat(model="gemma3:12b", messages=messages)
-            end_time = time.time()
-            logger.info(f"LLM communication completed in {end_time - start_time:.2f} seconds.")
-            return response["message"]["content"]
-        finally:
-            spinner.stop()
+    def load_database(self, filepath, format="json"):
+        if format == "json":
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        elif format == "pickle":
+            with open(filepath, "rb") as f:
+                data = pickle.load(f)
+        else:
+            raise ValueError(f"Unsupported format: {format}")
 
-    def encode_image_base64(self, image_path):
-        """
-        Encode an image in Base64.
-        """
-        spinner = Spinner("Encoding image to Base64")
-        spinner.start()
-        try:
-            start_time = time.time()
-            with open(image_path, "rb") as img_file:
-                encoded_image = base64.b64encode(img_file.read()).decode("utf-8")
-            end_time = time.time()
-            logger.info(f"Image encoded in Base64 in {end_time - start_time:.2f} seconds.")
-            return encoded_image
-        finally:
-            spinner.stop()
+        self.outputdb = data.get("outputdb", [])
+        for entry in self.outputdb:
+            vector = np.array(entry["vector"])
+            self.faiss_index.add_with_ids(vector.reshape(1, -1), np.array([entry["id"]]))
 
-    def vectorize_text(self, text):
-        """Vectorize text."""
-        spinner = Spinner("Vectorizing text")
-        spinner.start()
-        try:
-            start_time = time.time()
-            vector = self.embedder.encode([text], convert_to_numpy=True)
-            ids = np.arange(vector.shape[0])
-            self.faiss_index.add_with_ids(vector, ids)
-            end_time = time.time()
-            logger.info(f"Text vectorization completed in {end_time - start_time:.2f} seconds.")
-            return vector
-        finally:
-            spinner.stop()
-
-    def load_chunks(self, doc_dir: Path, chunk_size=500):
-        spinner = Spinner("Loading chunks")
-        spinner.start()
-        try:
-            chunks = []
-            sources = []
-            for file in doc_dir.glob("*.txt"):
-                text = file.read_text(encoding="utf-8")
-                for i in range(0, len(text), chunk_size):
-                    chunk = text[i:i+chunk_size].strip()
-                    if chunk:
-                        chunks.append(chunk)
-                        sources.append(file.name)
-            return chunks, sources
-        finally:
-            spinner.stop()
-
-    def build_vector_index(self, chunks):
-        spinner = Spinner("Building vector index")
-        spinner.start()
-        try:
-            embeddings = self.embedder.encode(chunks, convert_to_numpy=True)
-            ids = np.arange(embeddings.shape[0])
-            self.faiss_index.add_with_ids(embeddings, ids)
-            return self.faiss_index, embeddings
-        finally:
-            spinner.stop()
-
-    def retrieve(self, query: str, top_k=5):
-        spinner = Spinner("Retrieving results")
-        spinner.start()
-        try:
-            q_embed = self.embedder.encode([query])
-            D, I = self.faiss_index.search(np.array(q_embed), top_k)
-            return [self.chunks[i] for i in I[0]]
-        finally:
-            spinner.stop()
-
-# Example usage
 if __name__ == "__main__":
     veco = Vectorize()
-    outputdb = []  # Example database
-    veco.vectorize(outputdb, "Vectorizing_the_Company.pdf", use_compression=False)
-    print(outputdb)
-    """
-    # Example for FAISS retrieval
-    DOC_DIR = Path("ausgabe")
-    chunks, _ = veco.load_chunks(DOC_DIR)
-    veco.build_vector_index(chunks)
-    query = "Deine Frage hier"
-    results = veco.retrieve(query)
-    print(results)"""
+    input_file = "Vectorizing_the_Company.pdf"  # Change this to your test file
+    veco.vectorize(input_file, use_compression=False)
+    veco.save_database("vector_db.json", format="json")
+
+    # Example query
+    question = "What is the company's strategy?"
+    answer = veco.query_with_context(question)
+    print("\nAnswer:\n", answer)
