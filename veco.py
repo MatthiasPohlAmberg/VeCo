@@ -168,7 +168,7 @@ class Vectorize:
             return ""
 
     def extract_text_from_audio(self, audio_path):
-        result = self.whisper_model.transcribe(audio_path, language="de")
+        result = self.whisper_model.transcribe(audio_path, language="en")
         return result["text"]
 
     def extract_text_from_video(self, video_path):
