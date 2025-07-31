@@ -1,0 +1,21 @@
+@startuml
+package "User"{
+  [User Input (Files)]
+  [User Input (Prompt)]
+}
+
+package "VeCo" {
+  [User Input (Files)] -down-> [Vectorize]
+}
+
+database "Vector Database" {
+  [Vectorize] --> [OutputDB]
+}
+
+package "LLM-Host" {
+  [Vectorize] <-right-> [LLM]
+  [LLM] <-- [OutputDB]
+  [User Input (Prompt)] --> [LLM]
+  [LLM] --> [Output (Result)]
+}
+@enduml
