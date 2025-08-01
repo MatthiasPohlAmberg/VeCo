@@ -31,7 +31,7 @@ Write-Host ""
 Write-Host "Creating virtual environment using Python 3.10..."
 py -3.10 -m venv .venv
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Failed to create virtual environment."
+    Write-Host "Failed to create virtual environment. Exiting."
     exit 1
 }
 
@@ -41,7 +41,13 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host ""
 Write-Host "Activating virtual environment..."
-. .venv\Scripts\Activate.ps1
+# Check if the Activate.ps1 script exists
+if (Test-Path ".\.venv\Scripts\Activate.ps1") {
+    . .\.venv\Scripts\Activate.ps1
+} else {
+    Write-Host "Failed to find Activate.ps1 script in the virtual environment. Exiting."
+    exit 1
+}
 
 # -----------------------------------------
 # Install dependencies
@@ -52,7 +58,12 @@ Write-Host "Installing packages from requirements.txt..."
 if (Test-Path "requirements.txt") {
     pip install --upgrade pip
     pip install -r requirements.txt
-    Write-Host "Package installation complete."
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Package installation complete."
+    } else {
+        Write-Host "Failed to install packages. Please check the error messages above."
+        exit 1
+    }
 } else {
     Write-Host "File 'requirements.txt' not found. Skipping package installation."
 }

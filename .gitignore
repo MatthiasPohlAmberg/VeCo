@@ -236,3 +236,5 @@ __marimo__/
 .vscode/
 .history/
 *.code-workspace
+
+.venv/
