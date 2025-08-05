@@ -1,0 +1,73 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<pnml>
+  <net id="alpha_classic_net_1754036406.8598871" type="http://www.pnml.org/version-2009/grammar/pnmlcoremodel">
+    <name>
+      <text>alpha_classic_net_1754036406.8598871</text>
+    </name>
+    <page id="n0">
+      <place id="start">
+        <name>
+          <text>start</text>
+        </name>
+        <initialMarking>
+          <text>1</text>
+        </initialMarking>
+      </place>
+      <place id="end">
+        <name>
+          <text>end</text>
+        </name>
+      </place>
+      <place id="({'Receive Material Shortage Note'}, {'Calculate Material Quantity'})">
+        <name>
+          <text>({'Receive Material Shortage Note'}, {'Calculate Material Quantity'})</text>
+        </name>
+      </place>
+      <place id="({'Calculate Material Quantity'}, {'Inform Accounting'})">
+        <name>
+          <text>({'Calculate Material Quantity'}, {'Inform Accounting'})</text>
+        </name>
+      </place>
+      <place id="({'Inform Accounting'}, {'Place buy order'})">
+        <name>
+          <text>({'Inform Accounting'}, {'Place buy order'})</text>
+        </name>
+      </place>
+      <transition id="Place buy order">
+        <name>
+          <text>Place buy order</text>
+        </name>
+      </transition>
+      <transition id="Receive Material Shortage Note">
+        <name>
+          <text>Receive Material Shortage Note</text>
+        </name>
+      </transition>
+      <transition id="Calculate Material Quantity">
+        <name>
+          <text>Calculate Material Quantity</text>
+        </name>
+      </transition>
+      <transition id="Inform Accounting">
+        <name>
+          <text>Inform Accounting</text>
+        </name>
+      </transition>
+      <arc id="2225868705360" source="start" target="Receive Material Shortage Note"/>
+      <arc id="2225868706256" source="Calculate Material Quantity" target="({'Calculate Material Quantity'}, {'Inform Accounting'})"/>
+      <arc id="2225868705616" source="Place buy order" target="end"/>
+      <arc id="2225868705872" source="Receive Material Shortage Note" target="({'Receive Material Shortage Note'}, {'Calculate Material Quantity'})"/>
+      <arc id="2225868706000" source="({'Receive Material Shortage Note'}, {'Calculate Material Quantity'})" target="Calculate Material Quantity"/>
+      <arc id="2225868706384" source="({'Calculate Material Quantity'}, {'Inform Accounting'})" target="Inform Accounting"/>
+      <arc id="2225868706640" source="Inform Accounting" target="({'Inform Accounting'}, {'Place buy order'})"/>
+      <arc id="2225868706768" source="({'Inform Accounting'}, {'Place buy order'})" target="Place buy order"/>
+    </page>
+    <finalmarkings>
+      <marking>
+        <place idref="end">
+          <text>1</text>
+        </place>
+      </marking>
+    </finalmarkings>
+  </net>
+</pnml>

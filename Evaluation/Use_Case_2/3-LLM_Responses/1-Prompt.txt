@@ -1,0 +1,7 @@
+process = "Procurement Process"
+ref_model = "'Receive Material Shortage Note', 'Calculate Material Quantity', 'Inform Accounting', 'Place buy order'"
+trace = "'Receive Material Shortage Note', 'Calculate Material Quantity', 'Approval by Manager', 'Inform Accounting', 'Place buy order'"
+move = "Log Moves (log only): ['Approval by Manager']"
+
+You are an expert in process mining and tasked with conformance checking. The reference process model for the {process} is: {ref_model}. The checked trace is: {trace}.
+An algorithm has detected the following move(s): {move}. Is that detection correct? Verify both reference model and the trace.

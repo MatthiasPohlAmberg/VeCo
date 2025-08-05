@@ -1,0 +1,2 @@
+Answer:
+ Yes, we are using a custom table called ZSOCD for storing corresponding data related to the update dashboard activity in our premium customer rapid delivery process.

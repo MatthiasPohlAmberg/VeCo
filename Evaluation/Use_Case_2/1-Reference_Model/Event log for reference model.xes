@@ -1,0 +1,31 @@
+<log xes.version="2.0" xes.features="" xmlns="http://www.xes-standard.org/">
+  <extension name="Concept" prefix="concept" uri="http://www.xes-standard.org/concept.xesext" />
+  <extension name="Time" prefix="time" uri="http://www.xes-standard.org/time.xesext" />
+  <global scope="trace">
+    <string key="concept:name" value="" />
+  </global>
+  <global scope="event">
+    <string key="concept:name" value="" />
+    <date key="time:timestamp" value="1970-01-01T00:00:00" />
+  </global>
+  <classifier name="Activity" keys="concept:name" />
+  <trace>
+    <string key="concept:name" value="628" />
+    <event>
+      <string key="concept:name" value="Receive Material Shortage Note" />
+      <date key="time:timestamp" value="2025-08-01T09:00:00" />
+    </event>
+    <event>
+      <string key="concept:name" value="Calculate Material Quantity" />
+      <date key="time:timestamp" value="2025-08-01T10:00:00" />
+    </event>
+    <event>
+      <string key="concept:name" value="Inform Accounting" />
+      <date key="time:timestamp" value="2025-08-01T16:00:00" />
+    </event>
+    <event>
+      <string key="concept:name" value="Place buy order" />
+      <date key="time:timestamp" value="2025-08-01T22:00:00" />
+    </event>
+  </trace>
+</log>
