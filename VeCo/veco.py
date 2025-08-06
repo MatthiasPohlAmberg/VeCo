@@ -50,7 +50,8 @@ class Spinner:
         sys.stdout.flush()
 
 class Vectorize:
-    def __init__(self, default_model="gemma3:12b"):
+    # def __init__(self, default_model="gemma3:12b"):
+    def __init__(self, default_model="gemma3:12b", preload_path=None):  # New YZ
         self.default_model = default_model
         self.outputdb = []
         self.chunks = []
@@ -67,6 +68,10 @@ class Vectorize:
             logger.info(f"Models initialized in {time.time() - start_time:.2f} seconds.")
         finally:
             spinner.stop()
+
+        # New YZ
+        if preload_path:
+            self.load_database(preload_path)
 
     def check_ollama_models(self):
         try:
@@ -261,13 +266,24 @@ class Vectorize:
         else:
             raise ValueError(f"Unsupported format: {format}")
 
-        self.outputdb = data.get("outputdb", [])
-        for entry in self.outputdb:
-            vector = np.array(entry["vector"])
-            self.faiss_index.add_with_ids(vector.reshape(1, -1), np.array([entry["id"]]))
+        # New YZ
+        # self.outputdb = data.get("outputdb", [])
+        # for entry in self.outputdb:
+        #     vector = np.array(entry["vector"])
+        #     self.faiss_index.add_with_ids(vector.reshape(1, -1), np.array([entry["id"]]))
+
+        existing_ids = {entry["id"] for entry in self.outputdb}
+
+        for entry in data.get("outputdb", []):
+            if entry["id"] not in existing_ids:
+                vector = np.array(entry["vector"])
+                self.faiss_index.add_with_ids(vector.reshape(1, -1), np.array([entry["id"]]))
+                self.outputdb.append(entry)
+
 
 if __name__ == "__main__":
-    veco = Vectorize()
+    # veco = Vectorize()
+    veco = Vectorize(preload_path="vector_db.json")  # New YZ
     input_file = "Vectorizing_the_Company.pdf"  # Change this to your test file
     veco.vectorize(input_file, use_compression=False)
     veco.save_database("vector_db.json", format="json")
