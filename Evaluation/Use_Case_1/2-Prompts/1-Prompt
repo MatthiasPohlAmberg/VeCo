@@ -1,0 +1,2 @@
+We are gathering data to create an event log for our premium customer rapid delivery process. We have already identified the standard SAP tables for this. From the data in these tables we want to identify our activities. Are we using any custom tables that we may have missed?
+Do not talk about the standard SAP tables or generic ways of how to find custom tables. Only list tables you are aware of in relation to the process.
