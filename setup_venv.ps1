@@ -1,72 +1,61 @@
 # -----------------------------------------
-# PowerShell setup script for Python 3.10
+# PowerShell setup script for Python 3.12 + venv
 # -----------------------------------------
 
-Write-Host "Checking for Python 3.10 availability..."
+$ErrorActionPreference = "Stop"
 
-# Check if 'py' launcher exists
+Write-Host "Checking for Python 3.12 availability..."
+
+# 1) py-Launcher prüfen
 if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
-    Write-Host "Python Launcher 'py' not found. Please install Python 3.10 and ensure it is added to PATH."
+    Write-Host "Python Launcher 'py' not found. Please install Python 3.12 and add it to PATH."
     exit 1
 }
 
-# Check if Python 3.10 is available
-$pyVersion = py -3.10 --version
+# 2) Python 3.12 prüfen
+$ver = & py -3.12 -c "import sys; print(sys.version)"
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Python 3.10 not found. Please install it and ensure it is added to PATH."
+    Write-Host "Python 3.12 not found. Please install it and ensure it is in PATH."
     exit 1
 }
+Write-Host "Found Python 3.12: $ver"
 
-Write-Host "Found Python version: $pyVersion"
-
-# Optional: show path to Python launcher
-$pythonPath = (Get-Command py).Source
-Write-Host "Python launcher path: $pythonPath"
-
-# -----------------------------------------
-# Create virtual environment
-# -----------------------------------------
-
+# 3) venv erstellen
 Write-Host ""
-Write-Host "Creating virtual environment using Python 3.10..."
-py -3.10 -m venv .venv
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Failed to create virtual environment. Exiting."
-    exit 1
-}
+Write-Host "Creating virtual environment (.venv) with Python 3.12..."
+& py -3.12 -m venv .venv
 
-# -----------------------------------------
-# Activate virtual environment
-# -----------------------------------------
-
+# 4) venv aktivieren
 Write-Host ""
 Write-Host "Activating virtual environment..."
-# Check if the Activate.ps1 script exists
-if (Test-Path ".\.venv\Scripts\Activate.ps1") {
-    . .\.venv\Scripts\Activate.ps1
+$activate = ".\.venv\Scripts\Activate.ps1"
+if (Test-Path $activate) {
+    . $activate
 } else {
-    Write-Host "Failed to find Activate.ps1 script in the virtual environment. Exiting."
+    Write-Host "Activate.ps1 not found. Exiting."
     exit 1
 }
 
-# -----------------------------------------
-# Install dependencies
-# -----------------------------------------
+# 5) Immer das venv-Python verwenden (nicht 'py')
+$venvPy = Resolve-Path ".\.venv\Scripts\python.exe"
+Write-Host "Using venv Python at: $venvPy"
 
+# 6) pip upgraden + requirements installieren (in die venv)
 Write-Host ""
-Write-Host "Installing packages from requirements.txt..."
-if (Test-Path "requirements.txt") {
-    pip install --upgrade pip
-    pip install -r requirements.txt
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "Package installation complete."
-    } else {
-        Write-Host "Failed to install packages. Please check the error messages above."
-        exit 1
-    }
+Write-Host "Upgrading pip..."
+& $venvPy -m pip install --upgrade pip
+
+# Dateiname anpassen, falls du einen anderen verwendest
+$req = "requirements.txt"
+if (Test-Path $req) {
+    Write-Host "Installing packages from $req ..."
+    & $venvPy -m pip install -r $req
+    Write-Host "Package installation complete."
 } else {
-    Write-Host "File 'requirements.txt' not found. Skipping package installation."
+    Write-Host "File '$req' not found. Skipping package installation."
 }
 
+# 7) Nachweis: welches Python ist aktiv?
 Write-Host ""
-Write-Host "Virtual environment with Python 3.10 is ready."
+& $venvPy -c "import sys; print('VENV PYTHON:', sys.executable)"
+Write-Host "Virtual environment with Python 3.12 is ready."
