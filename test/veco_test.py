@@ -1,8 +1,5 @@
-from veco import Vectorize
-=======
-# tests/veco_test.py
 
-from VeCo import Vectorize
+from veco import Vectorize
 from pathlib import Path
 
 def main():
@@ -19,10 +16,6 @@ try:
     print("Existing database loaded.")
 except FileNotFoundError:
     print("No existing database found. A new one will be created.")
-=======
-    print(f"Project root:        {project_root}")
-    print(f"JSON DB (relative):  {db_path}")
-    print(f"Test data directory: {test_data_directory}")
 
     # 2) Vectorizer initialisieren (JSON-Fallback vorgeben)
     veco = Vectorize(preload_json_path=str(db_path))
@@ -64,9 +57,3 @@ except FileNotFoundError:
 # 5. Save the updated database
 veco.save_database(db_path, format="json")
 print("Database updated and saved.")
-=======
-
-    veco.close()
-
-if __name__ == "__main__":
-    main()
