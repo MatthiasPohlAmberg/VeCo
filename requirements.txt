@@ -9,4 +9,4 @@ pillow==11.0.0
 pytesseract==0.3.13
 python-pptx==1.0.2
 sentence-transformers==5.0.0
-torch==2.7.1 --index-url https://download.pytorch.org/whl/cu129
+torch==2.8.0 --index-url https://download.pytorch.org/whl/cu129
