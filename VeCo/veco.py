@@ -10,6 +10,8 @@
 #     * Summaries werden zusätzlich gespeichert (nicht als Embedding-Basis)
 #     * RAG-Query mit Ollama: query(database, frage, llm_model, ...)
 #     * Saubere, relative Pfadbehandlung (keine absoluten User-Pfade)
+#     * OPTIONAL: Speaker Diarization (via externem Modul veco_diarization.py)
+#     * OPTIONAL: CNN Bild-Erkennung (torchvision) + Caption (transformers)
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
@@ -20,8 +22,9 @@ import json
 import logging
 import threading
 import importlib
+import tempfile
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 import numpy as np
 import torch
@@ -40,6 +43,26 @@ try:
     import ollama
 except Exception:
     ollama = None
+
+# Optional: Vision – torchvision Klassifikation
+try:
+    import torchvision
+    from torchvision import transforms
+    _VISION_OK = True
+except Exception:
+    _VISION_OK = False
+    torchvision = None
+    transforms = None
+
+# Optional: Vision – Caption mit transformers
+try:
+    from transformers import VisionEncoderDecoderModel, ViTImageProcessor, AutoTokenizer
+    _CAPTION_OK = True
+except Exception:
+    _CAPTION_OK = False
+    VisionEncoderDecoderModel = None
+    ViTImageProcessor = None
+    AutoTokenizer = None
 
 # ---------------------------------- Logging ----------------------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -88,6 +111,14 @@ def _try_import_storages():
         return None
 
 
+def _try_import_diarization():
+    """Lazy-Import eines optionalen Moduls 'veco_diarization.py' (dein Code)."""
+    try:
+        return importlib.import_module("veco_diarization")
+    except Exception:
+        return None
+
+
 def _relpath(p: str) -> str:
     """Gibt Pfad p möglichst relativ zum aktuellen Arbeitsverzeichnis zurück."""
     try:
@@ -132,6 +163,7 @@ class Vectorize:
     - Extrahiert Text aus Dateien (txt/pdf/docx/pptx/image/audio/video)
     - Chunked, vektorisiert und indexiert (FAISS)
     - Speichert Daten in JSON (Fallback) oder optionalen Backends (SQLite/Mongo)
+    - OPTIONAL: Speaker Diarization (externe Pipeline), Bild-Klassifikation/Caption
     - Bietet RAG-Retrieval + Ollama-basiertes Querying
     """
 
@@ -182,6 +214,13 @@ class Vectorize:
                 self.check_ollama_models()
         finally:
             spinner.stop()
+
+        # Vision (optional) – Lazy Init Handles
+        self._vision_cls = None           # torchvision resnet
+        self._vision_tf = None            # transforms
+        self._caption_model = None        # transformers caption model
+        self._caption_processor = None
+        self._caption_tokenizer = None
 
         # Bootstrap: vorhandene Daten laden (Storage bevorzugt, sonst JSON)
         if self._ext_storage is not None:
@@ -275,11 +314,116 @@ class Vectorize:
             pass
         return text
 
+    # ----------------------- OPTIONAL: Diarization ---------------------
+    def _run_diarization(self, inputfile: str, diarization_kwargs: Optional[dict] = None) -> Optional[str]:
+        """
+        Führt (wenn verfügbar) deine externe Diarization-Pipeline aus:
+        - erwartet ein Modul 'veco_diarization.py' mit 'run_file' und 'build_config'
+        - gibt einen Speaker-getaggten Text zurück oder None bei Fehler/fehlendem Modul
+        """
+        dia = _try_import_diarization()
+        if dia is None:
+            logger.info("Diarization-Modul (veco_diarization.py) nicht gefunden – überspringe.")
+            return None
+
+        # temporärer Arbeitsordner innerhalb CWD:
+        with tempfile.TemporaryDirectory(prefix="veco_dia_") as tmpdir:
+            try:
+                # run_file(in_path, **kwargs) -> (success, out_txt_path)
+                kwargs = diarization_kwargs or {}
+                # Default-Parameter minimal halten; audio_dir = tmpdir
+                kwargs.setdefault("audio_dir", tmpdir)
+                ok, out_txt = dia.run_file(inputfile, **kwargs)
+                if ok and out_txt and os.path.exists(out_txt):
+                    return Path(out_txt).read_text(encoding="utf-8", errors="ignore")
+            except Exception as e:
+                logger.warning(f"Diarization fehlgeschlagen: {e}")
+        return None
+
+    # ----------------------- OPTIONAL: Vision/CNN ----------------------
+    def _init_vision_classifier(self):
+        if self._vision_cls is not None:
+            return
+        if not _VISION_OK:
+            logger.info("torchvision nicht verfügbar – Bildklassifikation wird übersprungen.")
+            return
+        # ResNet50 mit ImageNet-Gewichten (torchvision>=0.13 nutzt get_model(..., weights=...))
+        try:
+            weights = torchvision.models.ResNet50_Weights.DEFAULT
+            self._vision_cls = torchvision.models.resnet50(weights=weights)
+            self._vision_cls.eval()
+            self._vision_tf = weights.transforms()
+        except Exception:
+            # Fallback auf einfache Normalisierung/Resize
+            self._vision_cls = torchvision.models.resnet50(pretrained=True)
+            self._vision_cls.eval()
+            self._vision_tf = transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std =[0.229, 0.224, 0.225]),
+            ])
+
+    def _image_classify(self, inputfile: str, topk: int = 5) -> Optional[str]:
+        self._init_vision_classifier()
+        if self._vision_cls is None or self._vision_tf is None:
+            return None
+        try:
+            img = Image.open(inputfile).convert("RGB")
+            x = self._vision_tf(img).unsqueeze(0)
+            with torch.no_grad():
+                logits = self._vision_cls(x)
+                probs = torch.softmax(logits, dim=1)[0]
+                topv, topi = torch.topk(probs, k=min(topk, probs.shape[0]))
+                # Klassen-Namen aus den Weights (falls vorhanden)
+                try:
+                    labels = torchvision.models.ResNet50_Weights.DEFAULT.meta["categories"]
+                except Exception:
+                    # Notfall: Dummy-IDs
+                    labels = [f"class_{i}" for i in range(probs.shape[0])]
+                pairs = [f"{labels[int(i)]} ({float(v):.2%})" for v, i in zip(topv, topi)]
+                return "Bildklassifikation (Top): " + ", ".join(pairs)
+        except Exception as e:
+            logger.warning(f"Bildklassifikation fehlgeschlagen: {e}")
+            return None
+
+    def _init_caption(self):
+        if self._caption_model is not None:
+            return
+        if not _CAPTION_OK:
+            logger.info("transformers nicht verfügbar – Bild-Captioning wird übersprungen.")
+            return
+        try:
+            # kompaktes, häufig genutztes Modell
+            model_name = "nlpconnect/vit-gpt2-image-captioning"
+            self._caption_model = VisionEncoderDecoderModel.from_pretrained(model_name)
+            self._caption_processor = ViTImageProcessor.from_pretrained(model_name)
+            self._caption_tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self._caption_model.eval()
+        except Exception as e:
+            logger.warning(f"Caption-Modell konnte nicht geladen werden: {e}")
+            self._caption_model = None
+
+    def _image_caption(self, inputfile: str, max_new_tokens: int = 32) -> Optional[str]:
+        self._init_caption()
+        if self._caption_model is None:
+            return None
+        try:
+            img = Image.open(inputfile).convert("RGB")
+            pixel_values = self._caption_processor(img, return_tensors="pt").pixel_values
+            with torch.no_grad():
+                out_ids = self._caption_model.generate(pixel_values, max_new_tokens=max_new_tokens)
+            text = self._caption_tokenizer.decode(out_ids[0], skip_special_tokens=True).strip()
+            return f"Bildbeschreibung: {text}"
+        except Exception as e:
+            logger.warning(f"Bild-Captioning fehlgeschlagen: {e}")
+            return None
+
     # ----------------------- Embedding & Index -------------------------
     def embed_texts(self, texts: List[str]) -> np.ndarray:
         """Batch-Embedding für eine Liste von Strings (returns float32 ndarray)."""
         if not texts:
-            # Leerer Batch – liefere leeres Array mit korrekter Dim zurück
             dim = self.embedder.get_sentence_embedding_dimension()
             return np.zeros((0, dim), dtype=np.float32)
         vecs = self.embedder.encode(texts, convert_to_numpy=True, normalize_embeddings=False)
@@ -476,14 +620,25 @@ class Vectorize:
         return (resp.get("response") or "").strip()
 
     # ------------------------ Ingest / Vektorisierung ------------------
-    def vectorize(self, inputfile: str, use_compression: bool = False, model: Optional[str] = None):
+    def vectorize(
+        self,
+        inputfile: str,
+        use_compression: bool = False,
+        model: Optional[str] = None,
+        use_diarization: bool = False,
+        diarization_kwargs: Optional[dict] = None,
+        vision_mode: Optional[str] = None,  # "classify" | "caption" | "both"
+        topk: int = 5,                       # für Bildklassifikation
+    ):
         """
         Voller Ingest-Pipeline-Step:
-          1) Text extrahieren (Dateityp-abhängig)
-          2) Chunken mit Overlap
-          3) Embedding (nur Original-Chunks)
-          4) Index + Persistenz
-          5) Optional: Summarization (als separates Meta, nicht als Embedding-Basis)
+          1) Text extrahieren (Dateityp-abhängig). Falls use_diarization=True (nur Audio/Video):
+             -> Speaker-getaggte Transkription wird bevorzugt (wenn Modul vorhanden).
+          2) Für Bilder optional: CNN-Klassifikation/Caption → Textkontext erweitern.
+          3) Chunking mit Overlap
+          4) Embedding (nur Original-Chunks)
+          5) Index + Persistenz
+          6) Optional: Summarization (als separates Meta, nicht als Embedding-Basis)
         """
         spinner = Spinner("Vectorizing input")
         spinner.start()
@@ -491,38 +646,71 @@ class Vectorize:
             input_type = self.detect_input_type(inputfile)
             logger.info(f"Detected input type: {input_type}")
 
-            # 1) Volltext
-            if input_type in {"text", "pdf", "word", "pptx"}:
-                raw_text = self.extract_text(inputfile, input_type)
-            elif input_type == "image":
-                raw_text = self.extract_text_from_image(inputfile)
-            elif input_type == "audio":
-                raw_text = self.extract_text_from_audio(inputfile)
-            elif input_type == "video":
-                raw_text = self.extract_text_from_video(inputfile)
+            raw_text = ""
+
+            # 1) Volltext (mit optionaler Diarization für Audio/Video)
+            if use_diarization and input_type in {"audio", "video"}:
+                # bei Video erst Audio-Transkript mit Whisper? Nicht nötig – deine Pipeline transkribiert Segmente selbst.
+                dia_text = self._run_diarization(inputfile, diarization_kwargs=diarization_kwargs)
+                if dia_text:
+                    raw_text = dia_text
+                else:
+                    # Fallback: normale Transkription
+                    if input_type == "audio":
+                        raw_text = self.extract_text_from_audio(inputfile)
+                    else:
+                        raw_text = self.extract_text_from_video(inputfile)
             else:
-                raw_text = ""
+                if input_type in {"text", "pdf", "word", "pptx"}:
+                    raw_text = self.extract_text(inputfile, input_type)
+                elif input_type == "image":
+                    # Basistexte via OCR
+                    raw_text = self.extract_text_from_image(inputfile)
+                elif input_type == "audio":
+                    raw_text = self.extract_text_from_audio(inputfile)
+                elif input_type == "video":
+                    raw_text = self.extract_text_from_video(inputfile)
+                else:
+                    raw_text = ""
 
             raw_text = (raw_text or "").strip()
+
+            # 2) Vision-Extras (optional) → nur bei Bildern sinnvoll
+            vision_extra = ""
+            if input_type == "image" and vision_mode:
+                if vision_mode in ("classify", "both"):
+                    cls = self._image_classify(inputfile, topk=topk)
+                    if cls:
+                        vision_extra += cls
+                if vision_mode in ("caption", "both"):
+                    cap = self._image_caption(inputfile)
+                    if cap:
+                        if vision_extra:
+                            vision_extra += "\n"
+                        vision_extra += cap
+                if vision_extra:
+                    # Vision-Infos an OCR-Text anhängen (separat mit Header)
+                    raw_text = (raw_text + "\n\n" if raw_text else "") + f"[VISION]\n{vision_extra}"
+
             if not raw_text:
                 logger.warning("Kein Text extrahiert.")
                 return
 
-            # 2) Chunking
+            # 3) Chunking
             chunks = chunk_text(raw_text, chunk_chars=1800, overlap_chars=200)
             if not chunks:
                 chunks = [raw_text]
 
-            # 3) Embedding (nur Original-Chunks)
+            # 4) Embedding (nur Original-Chunks)
             vectors = self.embed_texts(chunks)
 
-            # 4) Doc-ID (Marker für Gruppierung; unabhängig von FAISS-IDs)
+            # 5) Doc-ID (Marker für Gruppierung; unabhängig von FAISS-IDs)
             doc_id = self._next_id()
 
-            # 5) Index + DB
+            # 6) Index + DB
             self._add_records(vectors, chunks, source=str(inputfile), doc_id=doc_id)
 
-            # 6) Optional: Summary (NICHT als Embedding-Basis)
+            # 7) Optional: Summary (NICHT als Embedding-Basis)
             if use_compression:
                 try:
                     summary = self.ask_llm(self.build_compression_prompt(raw_text), model or self.default_model)
@@ -673,6 +861,9 @@ if __name__ == "__main__":
     ap.add_argument("--use-mongo", default=None, help="Mongo URI (optional, z.B. mongodb://localhost:27017)")
     ap.add_argument("--mongo-db", default="veco_db", help="Mongo DB-Name (nur CLI-Demo)")
     ap.add_argument("--mongo-col", default="entries", help="Mongo Collection (nur CLI-Demo)")
+    ap.add_argument("--diarize", action="store_true", help="Speaker Diarization für Audio/Video verwenden")
+    ap.add_argument("--vision", default=None, help="Bildmodus: classify|caption|both")
+    ap.add_argument("--topk", type=int, default=5, help="Top-K Klassen für Bildklassifikation")
     args = ap.parse_args()
 
     # Optionales Storage fürs Ingest (CLI-Demo)
@@ -694,7 +885,14 @@ if __name__ == "__main__":
 
     if args.input:
         # Ingest
-        veco.vectorize(args.input, use_compression=args.compress)
+        veco.vectorize(
+            args.input,
+            use_compression=args.compress,
+            use_diarization=args.diarize,
+            diarization_kwargs=None,         # bei Bedarf mit Parametern befüllen
+            vision_mode=args.vision,
+            topk=args.topk,
+        )
         veco.save_database(args.json)
 
         # Kurzer Retrieval-Test (ohne LLM)
@@ -703,5 +901,7 @@ if __name__ == "__main__":
     else:
         print("Kein Input übergeben. Beispiel:")
         print("  python veco.py docs/report.pdf --compress --json vector_db.json --use-sqlite data/veco.sqlite")
+        print("  python veco.py sample.wav --diarize --json vector_db.json")
+        print("  python veco.py image.jpg --vision both --json vector_db.json")
 
     veco.close()
