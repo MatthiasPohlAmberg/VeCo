@@ -1,6 +1,6 @@
 # VeCo
 
-**VeCo** ist ein Python-Toolkit (Python 3.9–3.10), um unterschiedlichste Dokumente – Text, PDF, Word, PowerPoint, Bilder, Audio und Video – in Vektor­repräsentationen zu transformieren.  
+**VeCo** ist ein Python-Toolkit (Python 3.10–3.11), um unterschiedlichste Dokumente – Text, PDF, Word, PowerPoint, Bilder, Audio und Video – in Vektor­repräsentationen zu transformieren.  
 Die Embeddings werden in einem FAISS-Index gespeichert und können optional zusätzlich in JSON (Fallback), SQLite oder MongoDB persistiert werden.  
 Mit der integrierten RAG-Schnittstelle lassen sich Wissensdatenbanken direkt über **Ollama-LLMs** abfragen.
 
@@ -40,8 +40,8 @@ Mit der integrierten RAG-Schnittstelle lassen sich Wissensdatenbanken direkt üb
 
 ## Dependencies
 
-- Python 3.12
-- `torch`, `torchaudio` (über extra `torch-cu129` oder CPU-Variante installierbar)
+- Python 3.10 oder 3.11
+- `torch`, `torchaudio`, `torchvision` (CPU-Wheels via PyPI; für CUDA bitte offizielle PyTorch-Anleitung nutzen)
 - `sentence-transformers`
 - `faiss-cpu`
 - `openai-whisper`
@@ -51,10 +51,9 @@ Mit der integrierten RAG-Schnittstelle lassen sich Wissensdatenbanken direkt üb
 - `moviepy`
 - `python-docx`
 - `python-pptx`
-- `numpy` (2.2.6)
-- `scipy>=1.13`
+- `numpy` & `scipy`
 - `ollama`
-- `webrtcvad-wheels`, `librosa`, `soundfile`, `numba`, `speechbrain`
+- `webrtcvad-wheels`, `librosa`, `soundfile`, `speechbrain`
 - (Siehe `requirements.txt` / `pyproject.toml` für exakte Versionen)
 
 ## Installation
@@ -78,13 +77,9 @@ oder mit `pyproject.toml`:
 pip install .
 ```
 
-### 3. PyTorch + CUDA 12.9 installieren (optional)
+### 3. PyTorch-Konfiguration (optional)
 
-```bash
-pip install --extra-index-url https://download.pytorch.org/whl/cu129 "veco[torch-cu129]"
-```
-
-> Für CPU-Only kannst du Torch auch direkt von PyPI installieren.
+Folge der offiziellen [PyTorch Installationsanleitung](https://pytorch.org/get-started/locally/) für deine GPU/CPU-Konfiguration. Für eine reine CPU-Installation genügt das Standard-`pip install` der Requirements.
 
 ## Usage
 
