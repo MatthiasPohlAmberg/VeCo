@@ -3,7 +3,7 @@ from VeCo import Vectorize
 
 def main():
     # Absoluter Projekt-Root als Path
-    project_root = Path(r"E:\01_Dokumente\12_Startup-Mentor\MP_Data")
+    project_root = Path(r"X:\01_Dokumente\12_Startup-Mentor\MP_Data")
 
     db_path = project_root / "vector_db.json"
     test_data_directory = project_root / "test_data"

@@ -11,7 +11,8 @@
 #     * RAG-Query mit Ollama: query(database, frage, llm_model, ...)
 #     * Saubere, relative Pfadbehandlung (keine absoluten User-Pfade)
 #     * OPTIONAL: Speaker Diarization (via externem Modul veco_diarization.py)
-#     * OPTIONAL: CNN Bild-Erkennung (torchvision) + Caption (transformers)
+#     * OPTIONAL: CNN Bild-Erkennung (torchvision) + Caption via externem Modul veco_pic_describe
+#     * AUTO-Heuristik: maximale sinnvolle Pipeline je Dateityp, falls nichts explizit gesetzt
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ import threading
 import importlib
 import tempfile
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 
 import numpy as np
 import torch
@@ -44,7 +45,7 @@ try:
 except Exception:
     ollama = None
 
-# Optional: Vision – torchvision Klassifikation
+# Optional: Vision – torchvision Klassifikation (ResNet50)
 try:
     import torchvision
     from torchvision import transforms
@@ -53,16 +54,6 @@ except Exception:
     _VISION_OK = False
     torchvision = None
     transforms = None
-
-# Optional: Vision – Caption mit transformers
-try:
-    from transformers import VisionEncoderDecoderModel, ViTImageProcessor, AutoTokenizer
-    _CAPTION_OK = True
-except Exception:
-    _CAPTION_OK = False
-    VisionEncoderDecoderModel = None
-    ViTImageProcessor = None
-    AutoTokenizer = None
 
 # ---------------------------------- Logging ----------------------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -112,9 +103,17 @@ def _try_import_storages():
 
 
 def _try_import_diarization():
-    """Lazy-Import eines optionalen Moduls 'veco_diarization.py' (dein Code)."""
+    """Lazy-Import eines optionalen Moduls 'veco_diarization.py' (Speaker Diarization)."""
     try:
         return importlib.import_module("veco_diarization")
+    except Exception:
+        return None
+
+
+def _try_import_pic_describe():
+    """Lazy-Import eines optionalen Moduls 'veco_pic_describe' (externe Bildbeschreibung)."""
+    try:
+        return importlib.import_module("veco_pic_describe")
     except Exception:
         return None
 
@@ -144,7 +143,6 @@ def chunk_text(text: str, chunk_chars: int = 1800, overlap_chars: int = 200) -> 
     while i < n:
         end = min(i + chunk_chars, n)
         cut = text.rfind(".", i, end)
-        # Nur schneiden, wenn Punkt nicht zu früh liegt; sonst hart am Ende schneiden
         if cut == -1 or cut < i + int(0.6 * chunk_chars):
             cut = end
         chunk = text[i:cut].strip()
@@ -163,7 +161,8 @@ class Vectorize:
     - Extrahiert Text aus Dateien (txt/pdf/docx/pptx/image/audio/video)
     - Chunked, vektorisiert und indexiert (FAISS)
     - Speichert Daten in JSON (Fallback) oder optionalen Backends (SQLite/Mongo)
-    - OPTIONAL: Speaker Diarization (externe Pipeline), Bild-Klassifikation/Caption
+    - OPTIONAL: Speaker Diarization (externe Pipeline), Bild-Klassifikation (torchvision),
+                Bildbeschreibung (externes Modul veco_pic_describe)
     - Bietet RAG-Retrieval + Ollama-basiertes Querying
     """
 
@@ -216,11 +215,8 @@ class Vectorize:
             spinner.stop()
 
         # Vision (optional) – Lazy Init Handles
-        self._vision_cls = None           # torchvision resnet
-        self._vision_tf = None            # transforms
-        self._caption_model = None        # transformers caption model
-        self._caption_processor = None
-        self._caption_tokenizer = None
+        self._vision_cls = None  # torchvision resnet50
+        self._vision_tf = None   # zugehörige Transforms
 
         # Bootstrap: vorhandene Daten laden (Storage bevorzugt, sonst JSON)
         if self._ext_storage is not None:
@@ -326,12 +322,9 @@ class Vectorize:
             logger.info("Diarization-Modul (veco_diarization.py) nicht gefunden – überspringe.")
             return None
 
-        # temporärer Arbeitsordner innerhalb CWD:
         with tempfile.TemporaryDirectory(prefix="veco_dia_") as tmpdir:
             try:
-                # run_file(in_path, **kwargs) -> (success, out_txt_path)
                 kwargs = diarization_kwargs or {}
-                # Default-Parameter minimal halten; audio_dir = tmpdir
                 kwargs.setdefault("audio_dir", tmpdir)
                 ok, out_txt = dia.run_file(inputfile, **kwargs)
                 if ok and out_txt and os.path.exists(out_txt):
@@ -347,7 +340,6 @@ class Vectorize:
         if not _VISION_OK:
             logger.info("torchvision nicht verfügbar – Bildklassifikation wird übersprungen.")
             return
-        # ResNet50 mit ImageNet-Gewichten (torchvision>=0.13 nutzt get_model(..., weights=...))
         try:
             weights = torchvision.models.ResNet50_Weights.DEFAULT
             self._vision_cls = torchvision.models.resnet50(weights=weights)
@@ -375,12 +367,11 @@ class Vectorize:
             with torch.no_grad():
                 logits = self._vision_cls(x)
                 probs = torch.softmax(logits, dim=1)[0]
-                topv, topi = torch.topk(probs, k=min(topk, probs.shape[0]))
-                # Klassen-Namen aus den Weights (falls vorhanden)
+                k = min(topk, probs.shape[0])
+                topv, topi = torch.topk(probs, k=k)
                 try:
                     labels = torchvision.models.ResNet50_Weights.DEFAULT.meta["categories"]
                 except Exception:
-                    # Notfall: Dummy-IDs
                     labels = [f"class_{i}" for i in range(probs.shape[0])]
                 pairs = [f"{labels[int(i)]} ({float(v):.2%})" for v, i in zip(topv, topi)]
                 return "Bildklassifikation (Top): " + ", ".join(pairs)
@@ -388,36 +379,29 @@ class Vectorize:
             logger.warning(f"Bildklassifikation fehlgeschlagen: {e}")
             return None
 
-    def _init_caption(self):
-        if self._caption_model is not None:
-            return
-        if not _CAPTION_OK:
-            logger.info("transformers nicht verfügbar – Bild-Captioning wird übersprungen.")
-            return
-        try:
-            # kompaktes, häufig genutztes Modell
-            model_name = "nlpconnect/vit-gpt2-image-captioning"
-            self._caption_model = VisionEncoderDecoderModel.from_pretrained(model_name)
-            self._caption_processor = ViTImageProcessor.from_pretrained(model_name)
-            self._caption_tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self._caption_model.eval()
-        except Exception as e:
-            logger.warning(f"Caption-Modell konnte nicht geladen werden: {e}")
-            self._caption_model = None
-
-    def _image_caption(self, inputfile: str, max_new_tokens: int = 32) -> Optional[str]:
-        self._init_caption()
-        if self._caption_model is None:
+    def _image_caption_external(self, inputfile: str, **kwargs) -> Optional[str]:
+        """
+        Nutzt ein externes Projekt 'veco_pic_describe' (falls vorhanden).
+        Erwartete API (mindestens eine der folgenden):
+          - describe(image_path: str, **kwargs) -> str
+          - run(image_path: str, **kwargs) -> str
+        """
+        mod = _try_import_pic_describe()
+        if mod is None:
+            logger.info("veco_pic_describe nicht gefunden – Bildbeschreibung wird übersprungen.")
             return None
         try:
-            img = Image.open(inputfile).convert("RGB")
-            pixel_values = self._caption_processor(img, return_tensors="pt").pixel_values
-            with torch.no_grad():
-                out_ids = self._caption_model.generate(pixel_values, max_new_tokens=max_new_tokens)
-            text = self._caption_tokenizer.decode(out_ids[0], skip_special_tokens=True).strip()
-            return f"Bildbeschreibung: {text}"
+            if hasattr(mod, "describe") and callable(mod.describe):
+                text = mod.describe(inputfile, **kwargs)
+            elif hasattr(mod, "run") and callable(mod.run):
+                text = mod.run(inputfile, **kwargs)
+            else:
+                logger.warning("veco_pic_describe hat weder describe() noch run().")
+                return None
+            text = (text or "").strip()
+            return f"Bildbeschreibung: {text}" if text else None
         except Exception as e:
-            logger.warning(f"Bild-Captioning fehlgeschlagen: {e}")
+            logger.warning(f"Externe Bildbeschreibung fehlgeschlagen: {e}")
             return None
 
     # ----------------------- Embedding & Index -------------------------
@@ -588,7 +572,6 @@ class Vectorize:
         if lower.startswith("mongodb://") or lower.startswith("mongodb+srv://"):
             if stor_mod is None:
                 raise RuntimeError("Mongo verlangt 'storages.py'. Bitte bereitstellen.")
-            # Default-DB/Collection – bei Bedarf außerhalb konfigurierbar machen
             self._ext_storage = stor_mod.MongoStorage(uri=db, db_name="veco_db", collection="entries")
             self._bootstrap_from_storage()
             self._active_db = db
@@ -625,16 +608,20 @@ class Vectorize:
         inputfile: str,
         use_compression: bool = False,
         model: Optional[str] = None,
-        use_diarization: bool = False,
+
+        # AUTO-Heuristik:
+        use_diarization: Optional[bool] = None,   # None = AUTO, True/False = erzwingen
         diarization_kwargs: Optional[dict] = None,
-        vision_mode: Optional[str] = None,  # "classify" | "caption" | "both"
-        topk: int = 5,                       # für Bildklassifikation
+
+        vision_mode: Optional[str] = None,        # None = AUTO (für Bilder), "classify" | "caption" | "both" | ""
+        topk: int = 5,                            # für Bildklassifikation
+        pic_kwargs: Optional[dict] = None,        # optionale Parameter für veco_pic_describe
     ):
         """
         Voller Ingest-Pipeline-Step:
           1) Text extrahieren (Dateityp-abhängig). Falls use_diarization=True (nur Audio/Video):
              -> Speaker-getaggte Transkription wird bevorzugt (wenn Modul vorhanden).
-          2) Für Bilder optional: CNN-Klassifikation/Caption → Textkontext erweitern.
+          2) Für Bilder optional: CNN-Klassifikation und/oder externe Bildbeschreibung.
           3) Chunking mit Overlap
           4) Embedding (nur Original-Chunks)
           5) Index + Persistenz
@@ -648,24 +635,23 @@ class Vectorize:
 
             raw_text = ""
 
-            # 1) Volltext (mit optionaler Diarization für Audio/Video)
+            # --- 1) Volltext (inkl. AUTO-Diarization für Audio/Video) ---
+            if use_diarization is None:
+                use_diarization = (input_type in {"audio", "video"}) and (_try_import_diarization() is not None)
+
             if use_diarization and input_type in {"audio", "video"}:
-                # bei Video erst Audio-Transkript mit Whisper? Nicht nötig – deine Pipeline transkribiert Segmente selbst.
                 dia_text = self._run_diarization(inputfile, diarization_kwargs=diarization_kwargs)
                 if dia_text:
                     raw_text = dia_text
                 else:
-                    # Fallback: normale Transkription
-                    if input_type == "audio":
-                        raw_text = self.extract_text_from_audio(inputfile)
-                    else:
-                        raw_text = self.extract_text_from_video(inputfile)
+                    raw_text = (self.extract_text_from_audio(inputfile)
+                                if input_type == "audio" else
+                                self.extract_text_from_video(inputfile))
             else:
                 if input_type in {"text", "pdf", "word", "pptx"}:
                     raw_text = self.extract_text(inputfile, input_type)
                 elif input_type == "image":
-                    # Basistexte via OCR
-                    raw_text = self.extract_text_from_image(inputfile)
+                    raw_text = self.extract_text_from_image(inputfile)  # OCR-Basis
                 elif input_type == "audio":
                     raw_text = self.extract_text_from_audio(inputfile)
                 elif input_type == "video":
@@ -675,21 +661,33 @@ class Vectorize:
 
             raw_text = (raw_text or "").strip()
 
-            # 2) Vision-Extras (optional) → nur bei Bildern sinnvoll
+            # --- 2) Vision-Extras (AUTO) – nur bei Bildern sinnvoll ---
             vision_extra = ""
-            if input_type == "image" and vision_mode:
+            if input_type == "image":
+                if vision_mode is None:
+                    can_cls = _VISION_OK
+                    can_cap = (_try_import_pic_describe() is not None)
+                    if can_cls and can_cap:
+                        vision_mode = "both"
+                    elif can_cls:
+                        vision_mode = "classify"
+                    elif can_cap:
+                        vision_mode = "caption"
+                    else:
+                        vision_mode = ""
+
                 if vision_mode in ("classify", "both"):
                     cls = self._image_classify(inputfile, topk=topk)
                     if cls:
                         vision_extra += cls
                 if vision_mode in ("caption", "both"):
-                    cap = self._image_caption(inputfile)
+                    cap = self._image_caption_external(inputfile, **(pic_kwargs or {}))
                     if cap:
                         if vision_extra:
                             vision_extra += "\n"
                         vision_extra += cap
+
                 if vision_extra:
-                    # Vision-Infos an OCR-Text anhängen (separat mit Header)
                     raw_text = (raw_text + "\n\n" if raw_text else "") + f"[VISION]\n{vision_extra}"
 
             if not raw_text:
@@ -861,9 +859,12 @@ if __name__ == "__main__":
     ap.add_argument("--use-mongo", default=None, help="Mongo URI (optional, z.B. mongodb://localhost:27017)")
     ap.add_argument("--mongo-db", default="veco_db", help="Mongo DB-Name (nur CLI-Demo)")
     ap.add_argument("--mongo-col", default="entries", help="Mongo Collection (nur CLI-Demo)")
-    ap.add_argument("--diarize", action="store_true", help="Speaker Diarization für Audio/Video verwenden")
-    ap.add_argument("--vision", default=None, help="Bildmodus: classify|caption|both")
+    # Optional: explizit Vision steuern (leer string, classify, caption, both)
+    ap.add_argument("--vision", default=None, help="Bildmodus: classify|caption|both|'' (None=AUTO)")
     ap.add_argument("--topk", type=int, default=5, help="Top-K Klassen für Bildklassifikation")
+    # Optional: explizit Diarization steuern (None=AUTO; true/false erzwingt)
+    ap.add_argument("--diarize", default=None, choices=["true", "false"], help="Diarization erzwingen (true/false). None=AUTO")
+
     args = ap.parse_args()
 
     # Optionales Storage fürs Ingest (CLI-Demo)
@@ -883,14 +884,20 @@ if __name__ == "__main__":
         write_through=True,
     )
 
+    # CLI → Mapping auf None/Bool
+    diarize_flag: Optional[bool]
+    if args.diarize is None:
+        diarize_flag = None  # AUTO
+    else:
+        diarize_flag = (args.diarize.lower() == "true")
+
     if args.input:
-        # Ingest
         veco.vectorize(
             args.input,
             use_compression=args.compress,
-            use_diarization=args.diarize,
+            use_diarization=diarize_flag,   # None=AUTO
             diarization_kwargs=None,         # bei Bedarf mit Parametern befüllen
-            vision_mode=args.vision,
+            vision_mode=args.vision,         # None=AUTO
             topk=args.topk,
         )
         veco.save_database(args.json)
@@ -901,7 +908,7 @@ if __name__ == "__main__":
     else:
         print("Kein Input übergeben. Beispiel:")
         print("  python veco.py docs/report.pdf --compress --json vector_db.json --use-sqlite data/veco.sqlite")
-        print("  python veco.py sample.wav --diarize --json vector_db.json")
+        print("  python veco.py sample.wav --diarize true --json vector_db.json")
         print("  python veco.py image.jpg --vision both --json vector_db.json")
 
     veco.close()

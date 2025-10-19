@@ -1,83 +1,135 @@
 # VeCo
 
-VeCo is a Python 3.10 based toolkit for transforming various documents—text, PDFs, images, audio, and video—into vector representations. These embeddings can be stored in a FAISS index for later retrieval or analysis.
+**VeCo** ist ein Python-Toolkit (Python 3.9–3.10), um unterschiedlichste Dokumente – Text, PDF, Word, PowerPoint, Bilder, Audio und Video – in Vektor­repräsentationen zu transformieren.  
+Die Embeddings werden in einem FAISS-Index gespeichert und können optional zusätzlich in JSON (Fallback), SQLite oder MongoDB persistiert werden.  
+Mit der integrierten RAG-Schnittstelle lassen sich Wissensdatenbanken direkt über **Ollama-LLMs** abfragen.
+
+## Features
+
+- Automatische **Input-Erkennung**: Text, PDF, Word, PowerPoint, Bild, Audio, Video
+- **Text-Extraktion**: `pdfplumber`, `python-docx`, `python-pptx`, `pytesseract`, `moviepy`, `whisper`
+- **Speaker Diarization** (optional über `veco_diarization.py` Integration)
+- **Vision-Erweiterungen**:
+  - OCR via `pytesseract`
+  - CNN-Klassifikation (torchvision ResNet)
+  - Externe Bildbeschreibung (optional via `veco_pic_describe`)
+- **Chunking mit Overlap** für RAG-fähige Embeddings
+- **Optionale Summaries** über Ollama-LLMs (werden separat gespeichert, nicht als Embedding-Basis)
+- **FAISS-Index** für effizientes Retrieval
+- **Persistenz**: JSON (Fallback, Stand-alone), SQLite oder MongoDB
+- **RAG-Queries**: End-to-End Abfrage (`query()`) → Kontext holen + Ollama-Antwort erzeugen
 
 ## Project Structure
 
 ```
 .
-├── veco.py           # Core vectorization library
-├── veco_test.py      # Example usage script
-├── requirements.txt  # Python dependencies
-├── test_data/        # Sample files for testing
-├── vector_db.json    # Example output vector database
-├── setup_venv.sh/.bat/.ps1  # Environment setup scripts
-├── run_veco_venv.*   # Scripts to activate the virtual environment
-├── Evaluation/       # Evaluation resources
-├── Old/              # Legacy scripts
-└── UML/              # Architecture diagrams
+├── VeCo/
+│   ├── __init__.py
+│   ├── veco.py            # Core vectorization library
+│   ├── storages.py        # Optionale SQLite/MongoDB Backends
+│   ├── veco_diarization.py# Optionale Speaker Diarization Pipeline
+│   └── veco_pic_describe/ # Optionales Projekt für Bildbeschreibung
+├── tests/
+│   └── veco_test.py       # Example usage script
+├── requirements.txt
+├── pyproject.toml / setup.py
+├── test_data/             # Sample files for testing
+├── vector_db.json         # Beispiel-DB (JSON Fallback)
+└── UML/                   # Architekturdiagramme
 ```
 
 ## Dependencies
 
-- Python 3.10
-- torch
-- sentence-transformers
-- faiss-cpu
-- openai-whisper
-- pdfplumber
-- pytesseract
-- pillow
-- moviepy
-- python-docx
-- python-pptx
-- numpy
-- ollama
-- (See `requirements.txt` for exact versions)
+- Python 3.12
+- `torch`, `torchaudio` (über extra `torch-cu129` oder CPU-Variante installierbar)
+- `sentence-transformers`
+- `faiss-cpu`
+- `openai-whisper`
+- `pdfplumber`
+- `pytesseract`
+- `pillow`
+- `moviepy`
+- `python-docx`
+- `python-pptx`
+- `numpy` (2.2.6)
+- `scipy>=1.13`
+- `ollama`
+- `webrtcvad-wheels`, `librosa`, `soundfile`, `numba`, `speechbrain`
+- (Siehe `requirements.txt` / `pyproject.toml` für exakte Versionen)
+
+## Installation
+
+### 1. Virtuelle Umgebung anlegen
+
+```bash
+python3.10 -m venv .venv
+source .venv/bin/activate    # Windows: .venv\Scripts\activate
+```
+
+### 2. Basis-Dependencies installieren
+
+```bash
+pip install -r requirements.txt
+```
+
+oder mit `pyproject.toml`:
+
+```bash
+pip install .
+```
+
+### 3. PyTorch + CUDA 12.9 installieren (optional)
+
+```bash
+pip install --extra-index-url https://download.pytorch.org/whl/cu129 "veco[torch-cu129]"
+```
+
+> Für CPU-Only kannst du Torch auch direkt von PyPI installieren.
 
 ## Usage
 
-1. **Create and activate a virtual environment (Python 3.10).**
+### Beispielskript (`tests/veco_test.py`)
 
-   ```bash
-   python3.10 -m venv .venv
-   source .venv/bin/activate  # On Windows use .venv\Scripts\activate
-   ```
+```bash
+python tests/veco_test.py
+```
 
-   Alternatively, run one of the provided `setup_venv` scripts.
+Dieses Skript lädt oder erstellt `vector_db.json`, vektorisiert alle Dateien im Ordner `test_data/` und speichert die aktualisierte Datenbank.
 
-2. **Install dependencies.**
+### Direkte Nutzung in Python
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+```python
+from VeCo import Vectorize
 
-3. **Vectorize files.**
+# JSON-Fallback
+veco = Vectorize(preload_json_path="vector_db.json")
 
-   ```bash
-   python veco_test.py
-   ```
+# Datei vektorisieren
+veco.vectorize("path/to/file.pdf", use_compression=True)
 
-   This script loads or creates `vector_db.json`, vectorizes every file in `test_data/`, and saves the updated database.
+# Datenbank speichern
+veco.save_database("vector_db.json")
 
-   To use the library directly:
-
-   ```python
-   from veco import Vectorize
-
-   veco = Vectorize()
-   veco.vectorize("path/to/file.pdf", use_compression=False)
-   veco.save_database("vector_db.json", format="json")
-   ```
+# RAG-Query (mit Ollama)
+res = veco.query(
+    database="vector_db.json",
+    frage="Worum geht es im Dokument?",
+    llm_model="gemma3:12b",
+)
+print(res["answer"])
+```
 
 ## Architecture
 
-VeCo centers around the `Vectorize` class:
+Die zentrale Klasse ist `Vectorize`:
 
-- **Input detection** determines whether the source is text, PDF, Word, PowerPoint, image, audio, or video.
-- **Text extraction** uses libraries like `pdfplumber`, `python-docx`, `python-pptx`, `pytesseract`, and `moviepy` to obtain raw text from different formats.
-- **Optional compression** leverages an Ollama-hosted language model to summarize large inputs.
-- **Embedding** is handled by `sentence-transformers`, producing numerical vectors.
-- **Storage and retrieval** of embeddings use a FAISS index, with serialized results saved to JSON or pickle.
+- **Input detection**: erkennt Dateityp
+- **Text extraction**: nutzt spezifische Libraries pro Typ
+- **Optional compression**: Summaries via Ollama
+- **Chunking**: Texte werden in kleine Overlap-Chunks zerlegt
+- **Embedding**: `sentence-transformers`
+- **Storage**: FAISS-Index + JSON/SQLite/Mongo
+- **Retrieval**: `retrieve_context()` liefert Chunks
+- **Query**: `query()` kombiniert Kontext + Ollama-Antwort → echtes RAG
 
-This architecture makes VeCo adaptable to multiple data sources while providing a consistent vector representation for downstream applications.
+Erweiterungen wie Speaker Diarization (`veco_diarization.py`) oder Bildbeschreibung (`veco_pic_describe`) sind modular integriert.

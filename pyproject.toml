@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "veco"
+version = "0.1.0"
+description = "Vectorization & RAG Toolkit"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Dein Name", email = "you@example.com" }]
+
+# Kern-Abhängigkeiten (NumPy 2.2.6 + kompatible Pins)
+dependencies = [
+  # Numerics
+  "numpy==2.2.6",
+  "scipy>=1.13.0,<1.16",
+  "numba==0.61.2",
+
+  # Vector DB & Media
+  "faiss-cpu==1.11.0.post1",
+  "moviepy==2.2.1",
+
+  # NLP / STT / RAG
+  "openai-whisper==20240930",
+  "sentence-transformers==5.0.0",
+  "ollama==0.5.1",
+
+  # Audio / DSP
+  "librosa==0.10.2.post1",
+  "soundfile",
+  "sounddevice==0.4.7",
+  "webrtcvad-wheels==2.0.12",
+
+  # Vision / OCR / Imaging
+  "pytesseract==0.3.13",
+  "Pillow==11.0.0",
+
+  # Documents
+  "pdfplumber==0.11.7",
+  "python-docx==1.2.0",
+  "python-pptx==1.0.2",
+
+  # Misc
+  "speechbrain",
+  "tqdm==4.66.5",
+]
+
+[project.optional-dependencies]
+# CUDA 12.9 Wheels – beim Installieren extra Index mitgeben (siehe unten)
+torch-cu129 = [
+  "torch==2.8.0",
+  "torchaudio==2.8.0",
+]
+
+# (Optional) CPU-only-Variante, falls du möchtest:
+# torch-cpu = [
+#   "torch==2.8.0",
+#   "torchaudio==2.8.0",
+# ]
+
+# (Optional) Dev-Extras
+dev = [
+  "pytest",
+  "black",
+  "ruff",
+  "mypy",
+]
+
+pic-describe = [
+  "transformers>=4.56,<5",
+  "sentencepiece",
+  "sacremoses",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["VeCo*"]
