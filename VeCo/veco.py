@@ -258,6 +258,8 @@ class Vectorize:
         force_fallback_embedder: bool = False,
     ):
         _require_dependency(torch, "torch", _TORCH_IMPORT_ERROR)
+        _require_dependency(whisper, "openai-whisper", _WHISPER_IMPORT_ERROR)
+        _require_dependency(SentenceTransformer, "sentence-transformers", _SENTENCE_TRANSFORMERS_IMPORT_ERROR)
         _require_dependency(IndexFlatL2, "faiss-cpu", _FAISS_IMPORT_ERROR)
         _require_dependency(IndexIDMap, "faiss-cpu", _FAISS_IMPORT_ERROR)
 
@@ -299,49 +301,10 @@ class Vectorize:
         spinner.start()
         try:
             device = "cuda" if torch.cuda.is_available() else "cpu"
-
-            if enable_audio:
-                if whisper is None:
-                    logger.warning(
-                        "openai-whisper nicht installiert – Audio-/Video-Transkription wird deaktiviert."
-                    )
-                else:
-                    load_kwargs = {}
-                    if whisper_download_root:
-                        load_kwargs["download_root"] = str(Path(whisper_download_root).expanduser())
-                    try:
-                        self.whisper_model = whisper.load_model(audio_model_size, device=device, **load_kwargs)
-                        self._audio_available = True
-                    except Exception as exc:
-                        logger.warning(
-                            "Whisper-Modell konnte nicht geladen werden (%s). Audio-/Video-Transkription deaktiviert.",
-                            exc,
-                        )
-
-            if not force_fallback_embedder and SentenceTransformer is not None:
-                try:
-                    self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
-                    self._fallback_embedder = None
-                except Exception as exc:
-                    logger.warning(
-                        "SentenceTransformer konnte nicht geladen werden (%s). Verwende Hash-Fallback-Embedder.",
-                        exc,
-                    )
-                    self.embedder = FallbackSentenceEmbedder(dim=fallback_embedding_dim)
-                    self._fallback_embedder = self.embedder
-            else:
-                if force_fallback_embedder and SentenceTransformer is not None:
-                    logger.info("Force-Fallback aktiviert – verwende Hash-Fallback-Embedder.")
-                else:
-                    logger.warning(
-                        "sentence-transformers nicht installiert – Verwende Hash-Fallback-Embedder."
-                    )
-                self.embedder = FallbackSentenceEmbedder(dim=fallback_embedding_dim)
-                self._fallback_embedder = self.embedder
-
+            self.whisper_model = whisper.load_model("base", device=device)
+            self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
             self._embedding_dim = int(self.embedder.get_sentence_embedding_dimension())
             self.faiss_index = IndexIDMap(IndexFlatL2(self._embedding_dim))
-
             if ollama is not None:
                 self.check_ollama_models()
         finally:
@@ -449,13 +412,6 @@ class Vectorize:
         - Audio extrahieren -> temporäre WAV im aktuellen Ordner
         - Whisper-Transkription
         """
-        if not self.audio_available:
-            logger.info(
-                "Audio-Transkription nicht verfügbar – verwende Platzhalter für Video %s.",
-                _relpath(str(inputfile)),
-            )
-            return self._audio_placeholder(inputfile)
-
         _require_dependency(VideoFileClip, "moviepy", _MOVIEPY_IMPORT_ERROR)
         base = Path(inputfile).stem
         tmp_wav = f"{base}.veco_tmp.wav"  # relativ, kein User-Home-Pfad

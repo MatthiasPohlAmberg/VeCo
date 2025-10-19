@@ -1,16 +1,10 @@
 from pathlib import Path
-import sys
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 from VeCo import Vectorize
 
 
 def main() -> None:
-    project_root = PROJECT_ROOT
+    project_root = Path(__file__).resolve().parents[1]
     db_path = project_root / "test" / "vector_db.json"
     test_data_directory = project_root / "test_data"
 
@@ -19,14 +13,8 @@ def main() -> None:
     print(f"Test data directory: {test_data_directory}")
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    if db_path.exists():
-        db_path.unlink()
 
-    veco = Vectorize(
-        preload_json_path=str(db_path),
-        enable_audio=False,  # offline Testumgebung – Whisper-Modelle nicht herunterladen
-        force_fallback_embedder=True,
-    )
+    veco = Vectorize(preload_json_path=str(db_path))
 
     try:
         veco.load_database(str(db_path))
