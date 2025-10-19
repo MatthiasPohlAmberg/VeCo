@@ -20,6 +20,7 @@ import os
 import sys
 import time
 import json
+import hashlib
 import logging
 import threading
 import importlib
@@ -28,16 +29,64 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 import numpy as np
-import torch
-import whisper
-from sentence_transformers import SentenceTransformer
-from faiss import IndexFlatL2, IndexIDMap
+
+try:
+    import torch  # type: ignore
+except ImportError as exc:  # pragma: no cover - import guard
+    torch = None  # type: ignore
+    _TORCH_IMPORT_ERROR = exc
+else:
+    _TORCH_IMPORT_ERROR = None
+
+try:
+    import whisper  # type: ignore
+except ImportError as exc:  # pragma: no cover - import guard
+    whisper = None  # type: ignore
+    _WHISPER_IMPORT_ERROR = exc
+else:
+    _WHISPER_IMPORT_ERROR = None
+
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError as exc:  # pragma: no cover - import guard
+    SentenceTransformer = None  # type: ignore
+    _SENTENCE_TRANSFORMERS_IMPORT_ERROR = exc
+else:
+    _SENTENCE_TRANSFORMERS_IMPORT_ERROR = None
+
+try:
+    from faiss import IndexFlatL2, IndexIDMap
+except ImportError as exc:  # pragma: no cover - import guard
+    IndexFlatL2 = IndexIDMap = None  # type: ignore
+    _FAISS_IMPORT_ERROR = exc
+else:
+    _FAISS_IMPORT_ERROR = None
+
 import pdfplumber
 import pytesseract
 from PIL import Image
 from docx import Document
 from pptx import Presentation
-from moviepy import VideoFileClip
+
+try:
+    from moviepy.editor import VideoFileClip
+except Exception as exc:  # pragma: no cover - import guard
+    VideoFileClip = None  # type: ignore
+    _MOVIEPY_IMPORT_ERROR = exc
+else:
+    _MOVIEPY_IMPORT_ERROR = None
+
+
+def _require_dependency(module, name: str, import_error: Exception | None):
+    """Raise a clear error if a mandatory dependency is missing."""
+    if module is None:
+        message = (
+            f"Die Bibliothek '{name}' wird für diese Funktion benötigt. "
+            "Bitte installiere die passende Abhängigkeit gemäß README/requirements."
+        )
+        if import_error is not None:
+            raise RuntimeError(message) from import_error
+        raise RuntimeError(message)
 
 # Optional: Ollama (nur wenn vorhanden/gewünscht)
 try:
@@ -58,6 +107,34 @@ except Exception:
 # ---------------------------------- Logging ----------------------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("veco")
+
+
+# -------------------------- Simple Embeddings -------------------------
+class FallbackSentenceEmbedder:
+    """Deterministic hashing-based embedder used when SBERT is unavailable."""
+
+    def __init__(self, dim: int = 384):
+        self.dim = dim
+
+    def get_sentence_embedding_dimension(self) -> int:
+        return self.dim
+
+    def encode(self, texts: List[str], convert_to_numpy: bool = True, normalize_embeddings: bool = False) -> np.ndarray:
+        vectors = np.zeros((len(texts), self.dim), dtype=np.float32)
+        if not texts:
+            return vectors
+        for idx, text in enumerate(texts):
+            digest = hashlib.sha256((text or "").encode("utf-8", errors="ignore")).digest()
+            expanded = np.frombuffer(digest, dtype=np.uint8).astype(np.float32)
+            repeats = int(np.ceil(self.dim / expanded.size))
+            tiled = np.tile(expanded, repeats)[: self.dim]
+            vec = tiled / 255.0
+            if normalize_embeddings:
+                norm = np.linalg.norm(vec)
+                if norm > 0:
+                    vec = vec / norm
+            vectors[idx] = vec
+        return vectors
 
 
 # ---------------------------------- Spinner ----------------------------------
@@ -174,7 +251,16 @@ class Vectorize:
         storage_kind: Optional[str] = None,
         storage_kwargs: Optional[dict] = None,
         write_through: bool = True,
+        enable_audio: bool = True,
+        audio_model_size: str = "base",
+        whisper_download_root: Optional[str] = None,
+        fallback_embedding_dim: int = 384,
+        force_fallback_embedder: bool = False,
     ):
+        _require_dependency(torch, "torch", _TORCH_IMPORT_ERROR)
+        _require_dependency(IndexFlatL2, "faiss-cpu", _FAISS_IMPORT_ERROR)
+        _require_dependency(IndexIDMap, "faiss-cpu", _FAISS_IMPORT_ERROR)
+
         # Basiskonfiguration
         self.default_model = default_model
         self.preload_json_path = _relpath(preload_json_path or "vector_db.json")
@@ -183,6 +269,9 @@ class Vectorize:
         # Interner Speicher (für Fallback & schnelles Save/Load)
         self.outputdb: List[Dict[str, Any]] = []
         self.id_lookup: Dict[int, Dict[str, Any]] = {}
+        self._next_vector_id = 0
+        self._next_doc_id = 0
+        self._active_db: Optional[str] = None
 
         # Optionales externes Storage (SQLite/Mongo)
         self._ext_storage = None
@@ -201,14 +290,58 @@ class Vectorize:
                 logger.warning("storages.py nicht gefunden – bleibe beim JSON-Fallback.")
 
         # Modelle laden (Whisper + SBERT, optional Ollama-Check)
+        self._audio_requested = enable_audio
+        self._audio_available = False
+        self.whisper_model = None
+        self._fallback_embedder: Optional[FallbackSentenceEmbedder] = None
+
         spinner = Spinner("Initializing models")
         spinner.start()
         try:
             device = "cuda" if torch.cuda.is_available() else "cpu"
-            self.whisper_model = whisper.load_model("base", device=device)
-            self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
-            emb_dim = self.embedder.get_sentence_embedding_dimension()
-            self.faiss_index = IndexIDMap(IndexFlatL2(emb_dim))
+
+            if enable_audio:
+                if whisper is None:
+                    logger.warning(
+                        "openai-whisper nicht installiert – Audio-/Video-Transkription wird deaktiviert."
+                    )
+                else:
+                    load_kwargs = {}
+                    if whisper_download_root:
+                        load_kwargs["download_root"] = str(Path(whisper_download_root).expanduser())
+                    try:
+                        self.whisper_model = whisper.load_model(audio_model_size, device=device, **load_kwargs)
+                        self._audio_available = True
+                    except Exception as exc:
+                        logger.warning(
+                            "Whisper-Modell konnte nicht geladen werden (%s). Audio-/Video-Transkription deaktiviert.",
+                            exc,
+                        )
+
+            if not force_fallback_embedder and SentenceTransformer is not None:
+                try:
+                    self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
+                    self._fallback_embedder = None
+                except Exception as exc:
+                    logger.warning(
+                        "SentenceTransformer konnte nicht geladen werden (%s). Verwende Hash-Fallback-Embedder.",
+                        exc,
+                    )
+                    self.embedder = FallbackSentenceEmbedder(dim=fallback_embedding_dim)
+                    self._fallback_embedder = self.embedder
+            else:
+                if force_fallback_embedder and SentenceTransformer is not None:
+                    logger.info("Force-Fallback aktiviert – verwende Hash-Fallback-Embedder.")
+                else:
+                    logger.warning(
+                        "sentence-transformers nicht installiert – Verwende Hash-Fallback-Embedder."
+                    )
+                self.embedder = FallbackSentenceEmbedder(dim=fallback_embedding_dim)
+                self._fallback_embedder = self.embedder
+
+            self._embedding_dim = int(self.embedder.get_sentence_embedding_dimension())
+            self.faiss_index = IndexIDMap(IndexFlatL2(self._embedding_dim))
+
             if ollama is not None:
                 self.check_ollama_models()
         finally:
@@ -231,6 +364,11 @@ class Vectorize:
             _ = ollama.list()
         except Exception:
             logger.info("Ollama nicht verfügbar – LLM-Kompression/RAG-Antwort ggf. deaktiviert.")
+
+    @property
+    def audio_available(self) -> bool:
+        """Indicates if Whisper-based transcription can be used."""
+        return bool(self._audio_available)
 
     def detect_input_type(self, path: str) -> str:
         """Dateityp heuristisch per Endung bestimmen."""
@@ -288,10 +426,22 @@ class Vectorize:
         txt = pytesseract.image_to_string(img, lang="deu+eng")
         return txt
 
+    def _audio_placeholder(self, inputfile: str) -> str:
+        name = Path(inputfile).name
+        return f"[AUDIO transcription unavailable: {name}]"
+
     def extract_text_from_audio(self, inputfile: str) -> str:
         """ASR via Whisper-Modell (erzwungen Deutsch; bei Bedarf anpassbar)."""
+        if not self.audio_available or self.whisper_model is None:
+            logger.info(
+                "Audio-Transkription nicht verfügbar – verwende Platzhalter für %s.",
+                _relpath(str(inputfile)),
+            )
+            return self._audio_placeholder(inputfile)
+
         result = self.whisper_model.transcribe(inputfile, language="de")
-        return result.get("text", "")
+        text = (result.get("text", "") or "").strip()
+        return text if text else self._audio_placeholder(inputfile)
 
     def extract_text_from_video(self, inputfile: str) -> str:
         """
@@ -299,15 +449,35 @@ class Vectorize:
         - Audio extrahieren -> temporäre WAV im aktuellen Ordner
         - Whisper-Transkription
         """
+        if not self.audio_available:
+            logger.info(
+                "Audio-Transkription nicht verfügbar – verwende Platzhalter für Video %s.",
+                _relpath(str(inputfile)),
+            )
+            return self._audio_placeholder(inputfile)
+
+        _require_dependency(VideoFileClip, "moviepy", _MOVIEPY_IMPORT_ERROR)
         base = Path(inputfile).stem
         tmp_wav = f"{base}.veco_tmp.wav"  # relativ, kein User-Home-Pfad
         clip = VideoFileClip(inputfile)
-        clip.audio.write_audiofile(tmp_wav, verbose=False, logger=None)
-        text = self.extract_text_from_audio(tmp_wav)
+        text = ""
         try:
-            os.remove(tmp_wav)
-        except Exception:
-            pass
+            clip.audio.write_audiofile(tmp_wav, verbose=False, logger=None)
+            text = self.extract_text_from_audio(tmp_wav)
+        finally:
+            try:
+                clip.close()
+            except Exception:
+                pass
+            try:
+                if clip.audio is not None:
+                    clip.audio.close()
+            except Exception:
+                pass
+            try:
+                os.remove(tmp_wav)
+            except Exception:
+                pass
         return text
 
     # ----------------------- OPTIONAL: Diarization ---------------------
@@ -413,16 +583,53 @@ class Vectorize:
         vecs = self.embedder.encode(texts, convert_to_numpy=True, normalize_embeddings=False)
         return np.asarray(vecs, dtype=np.float32)
 
-    def _next_id(self) -> int:
-        """Vergibt neue, globale Record-IDs (stabil über JSON/Storage)."""
-        if self.outputdb:
-            return max(int(r["id"]) for r in self.outputdb if "id" in r) + 1
-        try:
-            if self._ext_storage is not None:
-                return self._ext_storage.get_max_id() + 1
-        except Exception:
-            pass
-        return 0
+    def _reserve_vector_ids(self, count: int) -> np.ndarray:
+        if count <= 0:
+            return np.zeros((0,), dtype=np.int64)
+        start = self._next_vector_id
+        self._next_vector_id += count
+        return np.arange(start, start + count, dtype=np.int64)
+
+    def _allocate_doc_id(self) -> int:
+        doc_id = self._next_doc_id
+        self._next_doc_id += 1
+        return doc_id
+
+    def _reset_in_memory_state(self):
+        """Clear cached records, index and counters."""
+        self.outputdb.clear()
+        self.id_lookup.clear()
+        self._next_vector_id = 0
+        self._next_doc_id = 0
+        if getattr(self, "_embedding_dim", None) is not None:
+            self.faiss_index = IndexIDMap(IndexFlatL2(self._embedding_dim))
+
+    def _track_existing_record(self, rec: Dict[str, Any]):
+        """Register a record that was loaded from JSON or external storage."""
+        rid = rec.get("id")
+        if rid is not None:
+            try:
+                rid_int = int(rid)
+            except (TypeError, ValueError):
+                rid_int = None
+            else:
+                vec = rec.get("vector")
+                if isinstance(vec, list):
+                    v = np.array([vec], dtype=np.float32)
+                    ids = np.array([rid_int], dtype=np.int64)
+                    self.faiss_index.add_with_ids(v, ids)
+                    self.id_lookup[rid_int] = rec
+                if rid_int >= self._next_vector_id:
+                    self._next_vector_id = rid_int + 1
+
+        doc_id = rec.get("doc_id")
+        if doc_id is not None:
+            try:
+                doc_int = int(doc_id)
+            except (TypeError, ValueError):
+                return
+            if doc_int >= self._next_doc_id:
+                self._next_doc_id = doc_int + 1
 
     def _add_records(self, vectors: np.ndarray, chunks: List[str], source: str, doc_id: int):
         """
@@ -433,8 +640,9 @@ class Vectorize:
         - doc_id:  logische Gruppierung (erste ID dieses Dokuments)
         """
         assert vectors.shape[0] == len(chunks)
-        start_id = self._next_id()
-        ids = np.arange(start_id, start_id + len(chunks), dtype=np.int64)
+        ids = self._reserve_vector_ids(len(chunks))
+        if ids.size == 0:
+            return
 
         # FAISS: Embeddings mit expliziten IDs hinzufügen
         self.faiss_index.add_with_ids(vectors, ids)
@@ -476,8 +684,7 @@ class Vectorize:
         JSON-Fallback laden und FAISS + id_lookup füllen.
         Existiert die Datei nicht, wird leer gestartet (keine Exception).
         """
-        self.outputdb.clear()
-        self.id_lookup.clear()
+        self._reset_in_memory_state()
 
         path = json_path or self.preload_json_path
         if not Path(path).exists():
@@ -485,40 +692,38 @@ class Vectorize:
             return
 
         data = json.loads(Path(path).read_text(encoding="utf-8"))
-        cnt = 0
+        vector_cnt = 0
+        total_cnt = 0
         for rec in data.get("outputdb", []):
             self.outputdb.append(rec)
-            rid = rec.get("id", None)
-            vec = rec.get("vector", None)
-            if rid is not None and isinstance(vec, list):
-                v = np.array([vec], dtype=np.float32)
-                self.faiss_index.add_with_ids(v, np.array([int(rid)]))
-                self.id_lookup[int(rid)] = rec
-                cnt += 1
+            total_cnt += 1
+            before = self.faiss_index.ntotal
+            self._track_existing_record(rec)
+            if self.faiss_index.ntotal > before:
+                vector_cnt += 1
 
-        logger.info(f"JSON geladen: {cnt} Vektoren in FAISS.")
+        logger.info(f"JSON geladen: {vector_cnt} Vektoren in FAISS ({total_cnt} Datensätze).")
 
     def _bootstrap_from_storage(self):
         """
         Daten aus externem Storage (SQLite/Mongo) laden und Index/Lookup füllen.
         JSON bleibt unberührt.
         """
-        self.outputdb.clear()
-        self.id_lookup.clear()
+        self._reset_in_memory_state()
 
-        cnt = 0
+        vector_cnt = 0
+        total_cnt = 0
         for rec in self._ext_storage.load_all():
             self.outputdb.append(rec)
-            rid = rec.get("id", None)
-            vec = rec.get("vector", None)
-            if rid is not None and isinstance(vec, list):
-                v = np.array([vec], dtype=np.float32)
-                self.faiss_index.add_with_ids(v, np.array([int(rid)]))
-            if rid is not None:
-                self.id_lookup[int(rid)] = rec
-            cnt += 1
+            total_cnt += 1
+            before = self.faiss_index.ntotal
+            self._track_existing_record(rec)
+            if self.faiss_index.ntotal > before:
+                vector_cnt += 1
 
-        logger.info(f"Storage geladen: {cnt} Datensätze.")
+        logger.info(
+            f"Storage geladen: {total_cnt} Datensätze, davon {vector_cnt} mit Embeddings."
+        )
 
     def _switch_database(self, database: str):
         """
@@ -535,10 +740,7 @@ class Vectorize:
             return
 
         # Index & Caches resetten
-        emb_dim = self.embedder.get_sentence_embedding_dimension()
-        self.faiss_index = IndexIDMap(IndexFlatL2(emb_dim))
-        self.outputdb.clear()
-        self.id_lookup.clear()
+        self._reset_in_memory_state()
 
         # Externes Storage ggf. schließen
         if self._ext_storage is not None:
@@ -703,7 +905,7 @@ class Vectorize:
             vectors = self.embed_texts(chunks)
 
             # 5) Doc-ID (Marker für Gruppierung; unabhängig von FAISS-IDs)
-            doc_id = self._next_id()
+            doc_id = self._allocate_doc_id()
 
             # 6) Index + DB
             self._add_records(vectors, chunks, source=str(inputfile), doc_id=doc_id)
@@ -736,6 +938,8 @@ class Vectorize:
     def retrieve_context(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
         """Sucht die top_k ähnlichsten Chunks zu einer Query (Embedding + FAISS)."""
         qv = self.embed_texts([query])
+        if self.faiss_index.ntotal == 0:
+            return []
         D, I = self.faiss_index.search(qv, top_k)
         hits: List[Dict[str, Any]] = []
         for rid in I[0].tolist():
