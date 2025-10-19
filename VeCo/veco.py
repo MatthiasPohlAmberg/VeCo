@@ -20,6 +20,7 @@ import os
 import sys
 import time
 import json
+import hashlib
 import logging
 import threading
 import importlib
@@ -106,6 +107,34 @@ except Exception:
 # ---------------------------------- Logging ----------------------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("veco")
+
+
+# -------------------------- Simple Embeddings -------------------------
+class FallbackSentenceEmbedder:
+    """Deterministic hashing-based embedder used when SBERT is unavailable."""
+
+    def __init__(self, dim: int = 384):
+        self.dim = dim
+
+    def get_sentence_embedding_dimension(self) -> int:
+        return self.dim
+
+    def encode(self, texts: List[str], convert_to_numpy: bool = True, normalize_embeddings: bool = False) -> np.ndarray:
+        vectors = np.zeros((len(texts), self.dim), dtype=np.float32)
+        if not texts:
+            return vectors
+        for idx, text in enumerate(texts):
+            digest = hashlib.sha256((text or "").encode("utf-8", errors="ignore")).digest()
+            expanded = np.frombuffer(digest, dtype=np.uint8).astype(np.float32)
+            repeats = int(np.ceil(self.dim / expanded.size))
+            tiled = np.tile(expanded, repeats)[: self.dim]
+            vec = tiled / 255.0
+            if normalize_embeddings:
+                norm = np.linalg.norm(vec)
+                if norm > 0:
+                    vec = vec / norm
+            vectors[idx] = vec
+        return vectors
 
 
 # ---------------------------------- Spinner ----------------------------------
@@ -222,6 +251,11 @@ class Vectorize:
         storage_kind: Optional[str] = None,
         storage_kwargs: Optional[dict] = None,
         write_through: bool = True,
+        enable_audio: bool = True,
+        audio_model_size: str = "base",
+        whisper_download_root: Optional[str] = None,
+        fallback_embedding_dim: int = 384,
+        force_fallback_embedder: bool = False,
     ):
         _require_dependency(torch, "torch", _TORCH_IMPORT_ERROR)
         _require_dependency(whisper, "openai-whisper", _WHISPER_IMPORT_ERROR)
@@ -258,6 +292,11 @@ class Vectorize:
                 logger.warning("storages.py nicht gefunden – bleibe beim JSON-Fallback.")
 
         # Modelle laden (Whisper + SBERT, optional Ollama-Check)
+        self._audio_requested = enable_audio
+        self._audio_available = False
+        self.whisper_model = None
+        self._fallback_embedder: Optional[FallbackSentenceEmbedder] = None
+
         spinner = Spinner("Initializing models")
         spinner.start()
         try:
@@ -288,6 +327,11 @@ class Vectorize:
             _ = ollama.list()
         except Exception:
             logger.info("Ollama nicht verfügbar – LLM-Kompression/RAG-Antwort ggf. deaktiviert.")
+
+    @property
+    def audio_available(self) -> bool:
+        """Indicates if Whisper-based transcription can be used."""
+        return bool(self._audio_available)
 
     def detect_input_type(self, path: str) -> str:
         """Dateityp heuristisch per Endung bestimmen."""
@@ -345,10 +389,22 @@ class Vectorize:
         txt = pytesseract.image_to_string(img, lang="deu+eng")
         return txt
 
+    def _audio_placeholder(self, inputfile: str) -> str:
+        name = Path(inputfile).name
+        return f"[AUDIO transcription unavailable: {name}]"
+
     def extract_text_from_audio(self, inputfile: str) -> str:
         """ASR via Whisper-Modell (erzwungen Deutsch; bei Bedarf anpassbar)."""
+        if not self.audio_available or self.whisper_model is None:
+            logger.info(
+                "Audio-Transkription nicht verfügbar – verwende Platzhalter für %s.",
+                _relpath(str(inputfile)),
+            )
+            return self._audio_placeholder(inputfile)
+
         result = self.whisper_model.transcribe(inputfile, language="de")
-        return result.get("text", "")
+        text = (result.get("text", "") or "").strip()
+        return text if text else self._audio_placeholder(inputfile)
 
     def extract_text_from_video(self, inputfile: str) -> str:
         """
