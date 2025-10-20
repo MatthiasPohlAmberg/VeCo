@@ -1,29 +1,29 @@
 # -----------------------------------------
-# PowerShell setup script for Python 3.12 + venv
+# PowerShell setup script for Python 3.11 + venv
 # -----------------------------------------
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "Checking for Python 3.12 availability..."
+Write-Host "Checking for Python 3.11 availability..."
 
 # 1) Check for the Python launcher
 if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
-    Write-Host "Python Launcher 'py' not found. Please install Python 3.12 and add it to PATH."
+    Write-Host "Python Launcher 'py' not found. Please install Python 3.11 and add it to PATH."
     exit 1
 }
 
-# 2) Verify Python 3.12
-$ver = & py -3.12 -c "import sys; print(sys.version)"
+# 2) Verify Python 3.11
+$ver = & py -3.11 -c "import sys; print(sys.version)"
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Python 3.12 not found. Please install it and ensure it is in PATH."
+    Write-Host "Python 3.11 not found. Please install it and ensure it is in PATH."
     exit 1
 }
-Write-Host "Found Python 3.12: $ver"
+Write-Host "Found Python 3.11: $ver"
 
 # 3) Create the virtual environment
 Write-Host ""
-Write-Host "Creating virtual environment (.venv) with Python 3.12..."
-& py -3.12 -m venv .venv
+Write-Host "Creating virtual environment (.venv) with Python 3.11..."
+& py -3.11 -m venv .venv
 
 # 4) Activate the virtual environment
 Write-Host ""
@@ -58,4 +58,4 @@ if (Test-Path $req) {
 # 7) Confirmation: which Python is active?
 Write-Host ""
 & $venvPy -c "import sys; print('VENV PYTHON:', sys.executable)"
-Write-Host "Virtual environment with Python 3.12 is ready."
+Write-Host "Virtual environment with Python 3.11 is ready."
