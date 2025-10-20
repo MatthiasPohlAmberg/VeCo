@@ -1,6 +1,6 @@
 # VeCo
 
-VeCo is a Python toolkit (Python 3.10-3.11) that converts a broad range of document types - text, PDF, Word, PowerPoint, images, audio, and video - into vector representations that can be queried through Retrieval Augmented Generation (RAG).  
+VeCo-ai is a Python toolkit (Python 3.10-3.11) that converts a broad range of document types - text, PDF, Word, PowerPoint, images, audio, and video - into vector representations that can be queried through Retrieval Augmented Generation (RAG).  
 Embeddings are stored inside a FAISS index and can optionally be persisted to JSON (fallback), SQLite, or MongoDB. The integrated RAG interface lets you query knowledge bases via local **Ollama** models.
 
 ## Features

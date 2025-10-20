@@ -3,13 +3,13 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "veco"
+name = "veco-ai"
 version = "0.1.0"
 description = "Vectorization & RAG Toolkit"
 readme = "README.md"
 requires-python = ">=3.10,<3.12"
 license = "CC0-1.0"
-authors = [{ name = "Matthias Pohl" }]
+authors = [{ name = "Matthias Pohl" }, {name = "Yorck Zisgen"}]
 keywords = ["rag", "vector database", "embeddings", "multimodal", "process mining"]
 classifiers = [
   "Development Status :: 3 - Alpha",
