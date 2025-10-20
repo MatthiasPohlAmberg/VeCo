@@ -24,7 +24,7 @@ Embeddings are stored inside a FAISS index and can optionally be persisted to JS
 .
 |-- veco_ai/
 |   |-- __init__.py
-|   |-- veco.py              # Core vectorization library
+|   |-- veco_ai.py              # Core vectorization library
 |   |-- veco_diarization.py  # Optional speaker diarization pipeline
 |   `-- veco_pic_describe.py # Optional image captioning helpers
 |-- test/

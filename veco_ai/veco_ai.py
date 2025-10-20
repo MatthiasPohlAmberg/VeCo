@@ -1,4 +1,4 @@
-# veco.py
+# veco_ai.py
 # -----------------------------------------------------------------------------
 # veco-ai - Stand-alone vectorizer and RAG retrieval toolkit
 #

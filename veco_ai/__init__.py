@@ -8,6 +8,6 @@ veco-ai package initializer.
 
 __version__ = "0.1.0"
 
-from .veco import Vectorize
+from .veco_ai import Vectorize
 
 __all__ = ["Vectorize", "__version__"]
