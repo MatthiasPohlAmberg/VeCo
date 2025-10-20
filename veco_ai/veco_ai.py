@@ -295,13 +295,25 @@ class Vectorize:
         self._audio_requested = enable_audio
         self._audio_available = False
         self.whisper_model = None
+        self.audio_model_size = audio_model_size
         self._fallback_embedder: Optional[FallbackSentenceEmbedder] = None
 
         spinner = Spinner("Initializing models")
         spinner.start()
         try:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            self.whisper_model = whisper.load_model("base", device=device)
+            if self._audio_requested:
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                try:
+                    self.whisper_model = whisper.load_model(audio_model_size, device=device)
+                except Exception as exc:
+                    logger.warning("Whisper initialisation failed (%s). Audio disabled.", exc)
+                    self.whisper_model = None
+                    self._audio_available = False
+                else:
+                    self._audio_available = True
+            else:
+                self.whisper_model = None
+                self._audio_available = False
             self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
             self._embedding_dim = int(self.embedder.get_sentence_embedding_dimension())
             self.faiss_index = IndexIDMap(IndexFlatL2(self._embedding_dim))
@@ -570,12 +582,31 @@ class Vectorize:
                 rid_int = None
             else:
                 vec = rec.get("vector")
-                if isinstance(vec, list):
-                    v = np.array([vec], dtype=np.float32)
-                    ids = np.array([rid_int], dtype=np.int64)
-                    self.faiss_index.add_with_ids(v, ids)
-                    self.id_lookup[rid_int] = rec
-                if rid_int >= self._next_vector_id:
+                if isinstance(vec, (list, tuple)):
+                    try:
+                        arr = np.asarray(vec, dtype=np.float32)
+                    except Exception as exc:  # pragma: no cover - defensive guard
+                        logger.warning(f"Skipped vector for record {rid_int}: {exc}")
+                    else:
+                        if arr.size > 0:
+                            arr = arr.reshape(1, -1)
+                            dim = getattr(self, "_embedding_dim", None)
+                            if dim is not None and arr.shape[1] != dim:
+                                if arr.size == dim:
+                                    arr = arr.reshape(1, dim)
+                                else:
+                                    logger.warning(
+                                        "Skipped vector for record %s: expected dim %s, got %s",
+                                        rid_int,
+                                        dim,
+                                        arr.shape[1],
+                                    )
+                                    arr = None
+                            if arr is not None:
+                                ids = np.array([rid_int], dtype=np.int64)
+                                self.faiss_index.add_with_ids(arr, ids)
+                                self.id_lookup[rid_int] = rec
+                if rid_int is not None and rid_int >= self._next_vector_id:
                     self._next_vector_id = rid_int + 1
 
         doc_id = rec.get("doc_id")
