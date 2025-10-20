@@ -2,9 +2,12 @@
 """
 VeCo package initializer.
 
-- Vermeidet Zirkularimporte.
-- Exportiert die öffentliche API (Vectorize).
+- Avoids circular imports.
+- Exposes the public API (Vectorize).
 """
 
-from .veco import Vectorize  # ✅ relativer Import, kein Kreis
-__all__ = ["Vectorize"]
+__version__ = "0.1.0"
+
+from .veco import Vectorize
+
+__all__ = ["Vectorize", "__version__"]

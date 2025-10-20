@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import faiss
 import ollama
@@ -6,67 +7,73 @@ from sentence_transformers import SentenceTransformer
 from typing import List
 import numpy as np
 
-# Ordner mit .txt-Dokumenten
-DOC_DIR = Path("ausgabe")  # z. B. Ausgabeordner deiner Text-Extraktion
+# Directory with .txt documents (e.g., output folder from a text extraction step)
+DOC_DIR = Path("output")
 EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
 LLM_MODEL = "gemma3:12b"
 
-# Lade Embedding-Modell
+# Load embedding model
 embedder = SentenceTransformer(EMBED_MODEL_NAME)
 
-# 1. 🔪 Dokumente in Chunks aufteilen
-def load_chunks(doc_dir: Path, chunk_size=500):
-    chunks = []
-    sources = []
+# 1. Split documents into chunks
+
+def load_chunks(doc_dir: Path, chunk_size: int = 500) -> tuple[list[str], list[str]]:
+    chunks: list[str] = []
+    sources: list[str] = []
     for file in doc_dir.glob("*.txt"):
         text = file.read_text(encoding="utf-8")
         for i in range(0, len(text), chunk_size):
-            chunk = text[i:i+chunk_size].strip()
+            chunk = text[i : i + chunk_size].strip()
             if chunk:
                 chunks.append(chunk)
                 sources.append(file.name)
     return chunks, sources
 
-# 2. 🧠 Embedding + FAISS-Vektorspeicherung
+# 2. Create embeddings and store them in a FAISS index
+
 def build_vector_index(chunks: List[str]):
     embeddings = embedder.encode(chunks, convert_to_numpy=True)
     index = faiss.IndexFlatL2(embeddings.shape[1])
     index.add(embeddings)
     return index, embeddings
 
-# 3. 🔍 Semantische Suche
-def retrieve(query: str, index, chunks, top_k=5):
-    q_embed = embedder.encode([query])
-    D, I = index.search(np.array(q_embed), top_k)
-    return [chunks[i] for i in I[0]]
+# 3. Semantic search
 
-# 4. 🧠 Prompt an Ollama mit Kontext
+def retrieve(query: str, index, chunks, top_k: int = 5) -> list[str]:
+    q_embed = embedder.encode([query])
+    distances, indices = index.search(np.array(q_embed), top_k)
+    return [chunks[i] for i in indices[0]]
+
+# 4. Send a prompt with context to Ollama
+
 def query_llm(query: str, context_chunks: List[str]) -> str:
     context = "\n---\n".join(context_chunks)
     prompt = f"""
-Du bist ein hilfreiches Assistenzsystem. Verwende ausschließlich die folgenden Informationen zur Beantwortung der Nutzerfrage:
+You are a helpful assistant. Use only the following information to answer the user's question:
 
 {context}
 
-Frage: {query}
-Antwort:"""
+Question: {query}
+Answer:"""
     response = ollama.chat(model=LLM_MODEL, messages=[{"role": "user", "content": prompt}])
     return response["message"]["content"]
 
-# ▶️ RAG-Workflow
-def run_rag(query: str):
-    print("🔄 Lade Dokumente...")
+# RAG workflow
+
+def run_rag(query: str) -> None:
+    print("Loading documents...")
     chunks, _ = load_chunks(DOC_DIR)
-    print(f"📚 {len(chunks)} Text-Chunks geladen.")
+    print(f"Loaded {len(chunks)} text chunks.")
     index, _ = build_vector_index(chunks)
-    print("🔍 Suche relevante Informationen...")
+    print("Searching relevant information...")
     context = retrieve(query, index, chunks)
-    print("🧠 Frage an LLM...")
+    print("Querying the LLM...")
     answer = query_llm(query, context)
-    print("✅ Antwort:\n")
+    print("Answer:\n")
     print(answer)
 
-# Beispielausführung
+# Example run
+
 if __name__ == "__main__":
-    frage = input("❓ Deine Frage: ")
-    run_rag(frage)
+    question = input("Your question: ")
+    run_rag(question)

@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-Importierbare Bibliothek für:
-- VAD + Chunking
+Importable library for:
+- VAD + chunking
 - Embeddings (ECAPA/Resemblyzer)
 - Clustering (fixed/thresh)
 - Merge
-- Whisper-Transkription
-Exponiert: Config, Pipeline, run_file, run_batch, build_config
+- Whisper transcription
+Exposes: Config, Pipeline, run_file, run_batch, build_config
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import whisper
 from sklearn.cluster import AgglomerativeClustering, KMeans
 from sklearn.metrics import pairwise_distances
 
-# ---- torch.load Patch (wie in deiner Datei) ----
+# ---- torch.load patch (aligned with the original script) ----
 _orig_load = torch.load
 def _patch_load(*args, **kwargs):
     if "weights_only" not in kwargs:
@@ -34,7 +34,7 @@ torch.load = _patch_load
 
 # ======================= Device Utils =======================
 def resolve_device(requested: str) -> str:
-    """Benutze CUDA nur, wenn auch wirklich verfügbar; sonst CPU."""
+    """Use CUDA only when it is actually available; otherwise fall back to CPU."""
     if requested == "cuda" and torch.cuda.is_available():
         return "cuda"
     return "cpu"
@@ -136,7 +136,7 @@ class AudioIO:
         return os.path.splitext(os.path.basename(path))[0]
 
     def _ffmpeg_convert(self, in_path: str, out_path: str) -> bool:
-        """Fallback-Konvertierung (exotische WAV/Codecs → PCM16, 16k, mono)."""
+        """Fallback conversion (exotic WAV/codecs -> PCM16, 16k, mono)."""
         cmd = [
             "ffmpeg", "-y", "-i", in_path,
             "-ac", "1", "-ar", str(self.cfg.target_sr),
@@ -146,7 +146,7 @@ class AudioIO:
         try:
             return subprocess.call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
         except FileNotFoundError:
-            # ffmpeg nicht installiert → kein Fallback möglich
+            # ffmpeg not installed -> fallback unavailable
             return False
 
     def convert_to_wav16k_mono(self, in_path: str, tmpdir: str) -> str:
@@ -156,7 +156,7 @@ class AudioIO:
             sf.write(out, y.astype(np.float32), self.cfg.target_sr, subtype="PCM_16")
             return out
         except Exception as e:
-            self.logger.warning(f"librosa/soundfile konnte '{in_path}' nicht lesen ({e}). Versuche ffmpeg-Fallback …")
+            self.logger.warning(f"librosa/soundfile could not read '{in_path}' ({e}). Trying ffmpeg fallback ...")
             ok = self._ffmpeg_convert(in_path, out)
             if not ok:
                 raise
@@ -202,7 +202,7 @@ class VADSegmenter:
         for (a, b) in segments:
             if (b - a) / sr >= self.cfg.min_speech_sec:
                 out.append((a, b))
-        self.logger.debug(f"VAD Segmente (n={len(out)}): {[(round(a/sr,2), round(b/sr,2)) for a,b in out][:12]} ...")
+        self.logger.debug(f"VAD segments (n={len(out)}): {[(round(a/sr,2), round(b/sr,2)) for a,b in out][:12]} ...")
         return out
 
 class ChunkSplitter:
@@ -241,13 +241,13 @@ class ECAPAEmbedder(BaseEmbedder):
         savedir = os.path.join(os.path.expanduser("~"), ".cache", "speechbrain_ecapa")
 
         def _load(savedir_arg):
-            # speechbrain 1.0 nutzt sb.inference.*, ältere Versionen sb.pretrained.*
+            # speechbrain 1.0 uses sb.inference.*, older versions use sb.pretrained.*
             try:
                 return sb.inference.EncoderClassifier.from_hparams(
                     source="speechbrain/spkrec-ecapa-voxceleb",
                     run_opts={"device": dev},
                     savedir=savedir_arg,
-                    # Tipp: neuere SpeechBrain-Versionen akzeptieren overrides:
+                    # Tip: newer SpeechBrain versions accept overrides:
                     # overrides={"pretrainer": {"collect_in": None}}
                 )
             except AttributeError:
@@ -258,12 +258,12 @@ class ECAPAEmbedder(BaseEmbedder):
                 )
 
         try:
-            # schneller: nutzt collect_in/symlinks (kann auf Windows 1314 werfen)
+            # Faster: use collect_in/symlinks (Windows may raise error 1314)
             self.cls = _load(savedir)
         except OSError as e:
-            # Kein Symlink-Recht → erneut ohne savedir (nutzt HF-Cache, kopiert)
+            # No symlink permissions -> retry without savedir (relies on HF cache, copies files)
             if getattr(e, "winerror", None) == 1314:
-                logger.warning("Keine Symlink-Rechte (WinError 1314). Lade ECAPA ohne Symlinks …")
+                logger.warning("No symlink permissions (WinError 1314). Loading ECAPA without symlinks ...")
                 self.cls = _load(None)
             else:
                 raise
@@ -289,9 +289,9 @@ class EmbedderFactory:
     @staticmethod
     def create(cfg: Config, logger: logging.Logger) -> BaseEmbedder:
         if cfg.emb_backend.lower() == "ecapa":
-            logger.info("Embedding-Backend: ECAPA (SpeechBrain)")
+            logger.info("Embedding backend: ECAPA (SpeechBrain)")
             return ECAPAEmbedder(cfg, logger)
-        logger.info("Embedding-Backend: Resemblyzer")
+        logger.info("Embedding backend: Resemblyzer")
         return ResemblyzerEmbedder(cfg, logger)
 
 class EmbeddingExtractor:
@@ -323,7 +323,7 @@ def _cluster_thresh_sweep(X: np.ndarray, grid: Sequence[float], logger: logging.
         k = labs.max() + 1
         logger.debug(f"[auto] thresh={th:.2f} -> k={k}")
         if 2 <= k <= 5:
-            logger.info(f"[auto] gewählt: thresh={th:.2f}, clusters={k}")
+            logger.info(f"[auto] selected: thresh={th:.2f}, clusters={k}")
             return labs
         if k > best_k:
             best_th, best_labs, best_k = th, labs, k
@@ -424,14 +424,14 @@ class WhisperTranscriber:
     def __init__(self, cfg: Config, logger: logging.Logger):
         self.cfg, self.logger = cfg, logger
         eff_dev = self.cfg.device  # hier ist das effektive Device bereits gesetzt
-        self.logger.info("Lade Whisper-Modell ...")
+        self.logger.info("Loading Whisper model ...")
         t0 = time.time()
         self.model = whisper.load_model(self.cfg.model_name, device=eff_dev)
         took = time.time() - t0
         if eff_dev == "cuda":
-            self.logger.info(f"Whisper geladen in {took:.2f}s auf CUDA ({describe_cuda()}).")
+            self.logger.info(f"Whisper loaded in {took:.2f}s on CUDA ({describe_cuda()}).")
         else:
-            self.logger.info(f"Whisper geladen in {took:.2f}s auf CPU.")
+            self.logger.info(f"Whisper loaded in {took:.2f}s on CPU.")
     def transcribe_wav(self, wav_path: str) -> str:
         res = self.model.transcribe(wav_path, **self.cfg.whisper_kw)
         return (res.get("text") or "").strip()
@@ -460,30 +460,30 @@ class Pipeline:
             self.logger.debug(f"Audio len={len(y)}, dur={len(y)/sr:.2f}s")
 
             vad_raw = self.vad.segments(y, sr)
-            self.logger.debug(f"Anzahl VAD-Chunks (vor Split): {len(vad_raw)}")
+            self.logger.debug(f"Number of VAD chunks (pre split): {len(vad_raw)}")
 
             chunks = self.splitter.split(vad_raw, sr)
-            self.logger.debug(f"Chunks nach Split (n={len(chunks)}): {[(round(a/sr,2), round(b/sr,2)) for a,b in chunks][:20]} ...")
-            if not chunks: raise RuntimeError("Keine Sprachsegmente gefunden.")
+            self.logger.debug(f"Chunks after split (n={len(chunks)}): {[(round(a/sr,2), round(b/sr,2)) for a,b in chunks][:20]} ...")
+            if not chunks: raise RuntimeError("No speech segments detected.")
 
             embs = self.emb_extractor.for_chunks(y, sr, chunks)
             valid = sum(e is not None for e in embs)
             self.logger.debug(f"Embeddings: valid={valid}/{len(embs)} (min_dur={self.cfg.emb_min_sec}s)")
-            if valid < 2: self.logger.warning("Sehr wenige valide Embeddings – Clustering könnte kollabieren.")
+            if valid < 2: self.logger.warning("Very few valid embeddings - clustering may collapse.")
 
             labels = self.clusterer.labels_from_embeddings(embs)
             uniq = sorted(set(labels)); counts = np.bincount(labels) if len(labels) else []
             self.logger.debug(f"Cluster IDs uniq: {uniq} (counts={counts.tolist() if len(counts)>0 else []})")
 
             merged = self.merger.merge_same_speaker_over_gaps(chunks, labels, sr)
-            self.logger.debug(f"Merged Segmente (n={len(merged)}): {merged[:12]} ...")
+            self.logger.debug(f"Merged segments (n={len(merged)}): {merged[:12]} ...")
 
             with open(out_txt, "w", encoding="utf-8") as f:
                 for idx, (s, e, spk) in enumerate(merged):
                     a, b = int(s*sr), int(e*sr)
                     dur = (b-a)/sr
                     if dur < self.cfg.segment_min_sec:
-                        self.logger.debug(f"[seg {idx}] zu kurz ({dur:.2f}s) -> skip"); continue
+                        self.logger.debug(f"[seg {idx}] too short ({dur:.2f}s) -> skip"); continue
                     clip = y[a:b]
                     self.audio.write_wav(seg_wav, clip, sr)
                     t_seg = time.time()
@@ -494,7 +494,7 @@ class Pipeline:
 
             return True, out_txt
         except Exception as ex:
-            self.logger.error(f"Fehler bei {in_path}: {ex}")
+            self.logger.error(f"Error processing {in_path}: {ex}")
             self.logger.debug(traceback.format_exc())
             return False, None
         finally:
@@ -506,20 +506,20 @@ class Pipeline:
             if not fname.lower().endswith((".mp3",".wav",".mp4",".opus",".m4a",".flac")):
                 continue
             in_path = os.path.join(self.cfg.audio_dir, fname)
-            self.logger.info(f"--- Datei: {in_path}")
+            self.logger.info(f"--- File: {in_path}")
             t0 = time.time()
             success, out_txt = self.process_file(in_path)
             if success:
-                self.logger.info(f"Fertig: {out_txt} ({time.time()-t0:.2f}s)")
+                self.logger.info(f"Completed: {out_txt} ({time.time()-t0:.2f}s)")
                 ok += 1
             else:
                 failed += 1
-        self.logger.info(f"Batch fertig. OK={ok}, Failed={failed} (Log in {os.path.join(self.cfg.audio_dir, self.cfg.log_filename)})")
+        self.logger.info(f"Batch done. OK={ok}, Failed={failed} (log at {os.path.join(self.cfg.audio_dir, self.cfg.log_filename)})")
 
-# ======================= Mini-API (für Imports) =======================
+# ======================= Mini-API (for imports) =======================
 def build_config(**kwargs) -> Config:
     """
-    Baue eine Config aus kwargs (alles optional).
+    Build a config from kwargs (everything optional).
     Beispiel: build_config(audio_dir="...", model_name="base", emb_backend="ecapa")
     """
     cfg = Config(**{**kwargs})
@@ -530,25 +530,25 @@ def _make_logger(cfg: Config) -> logging.Logger:
 
 def run_file(in_path: str, **kwargs) -> Tuple[bool, Optional[str]]:
     """
-    Einfacher Funktionsaufruf für andere Skripte.
-    Rückgabe: (success, output_txt_path)
+    Simple function call for other scripts.
+    Returns: (success, output_txt_path)
     """
     cfg = build_config(**kwargs)
-    # Effektives Device *einmalig* festlegen
+    # Determine the effective device once
     cfg.device = resolve_device(cfg.device)
     logger = _make_logger(cfg)
     logger.debug(f"Config: {asdict(cfg)}")
     log_env(logger)
     if cfg.device == "cuda":
-        logger.info(f"CUDA aktiv: {describe_cuda()}")
+        logger.info(f"CUDA active: {describe_cuda()}")
     else:
-        logger.info("CUDA nicht verfügbar – nutze CPU")
+        logger.info("CUDA not available - using CPU")
     pipe = Pipeline(cfg, logger)
     return pipe.process_file(in_path)
 
 def run_batch(audio_dir: Optional[str] = None, **kwargs) -> None:
     """
-    Batch-Verarbeitung eines Ordners.
+    Batch processing for a directory.
     """
     cfg = build_config(**kwargs)
     if audio_dir is not None:
@@ -558,8 +558,8 @@ def run_batch(audio_dir: Optional[str] = None, **kwargs) -> None:
     logger.debug(f"Config: {asdict(cfg)}")
     log_env(logger)
     if cfg.device == "cuda":
-        logger.info(f"CUDA aktiv: {describe_cuda()}")
+        logger.info(f"CUDA active: {describe_cuda()}")
     else:
-        logger.info("CUDA nicht verfügbar – nutze CPU")
+        logger.info("CUDA not available - using CPU")
     pipe = Pipeline(cfg, logger)
     pipe.run_batch()

@@ -3,7 +3,7 @@ import os
 import torch
 import time
 
-# Prüfen, ob CUDA verfügbar ist
+# Check whether CUDA is available
 if torch.cuda.is_available():
     print("CUDA is available! :)")
     print(f"Device count: {torch.cuda.device_count()}")
@@ -12,7 +12,7 @@ if torch.cuda.is_available():
 else:
     print("CUDA is NOT available :(")
 
-# Patch für torch.load, um weights_only=False zu erzwingen (sofern benötigt)
+# Patch torch.load to enforce weights_only=False (if needed)
 orig_load = torch.load
 def patch_load(*args, **kwargs):
     if "weights_only" not in kwargs:
@@ -20,35 +20,35 @@ def patch_load(*args, **kwargs):
     return orig_load(*args, **kwargs)
 torch.load = patch_load
 
-# Verzeichnis mit Audiodateien (MP3, WAV, ...)
+# Directory containing audio files (MP3, WAV, ...)
 folder_path = r"C:\Users\MatthiasPohl\Desktop\KI\whisper\Process"
 
-# Device auswählen
+# Select device
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Whisper-Modell laden (z. B. "turbo")
-print("Lade Whisper-Modell ...")
+# Load Whisper model (e.g., "turbo")
+print("Loading Whisper model ...")
 model_load_start = time.time()
 model = whisper.load_model("turbo", device=device)
 model_load_end = time.time()
-print(f"Modell geladen in {model_load_end - model_load_start:.2f} Sekunden auf {device}.")
+print(f"Model loaded in {model_load_end - model_load_start:.2f} seconds on {device}.")
 
-# Alle Dateien im Ordner durchgehen
+# Iterate over all files in the folder
 for filename in os.listdir(folder_path):
     if filename.lower().endswith((".mp3", ".wav", ".mp4")):
         audio_path = os.path.join(folder_path, filename)
         base_name, _ = os.path.splitext(filename)
         
-        # Einen kombinierten Text-Dateinamen erstellen (z. B. "audiofile_full.txt")
+        # Create a combined text filename (e.g., "audiofile_full.txt")
         output_txt_path = os.path.join(folder_path, f"{base_name}_full.txt")
         
-        print(f"\nVerarbeite: {audio_path}")
+        print(f"\nProcessing: {audio_path}")
         start_time = time.time()
         
-        # Transkription starten (Whisper teilt das Audio intern in Chunks auf)
+        # Start transcription (Whisper handles chunking internally)
         result = model.transcribe(audio_path)
         
-        # Abruf der automatisch erstellten Segmente
+        # Retrieve automatically generated segments
         segments = result.get("segments", [])
         
         # Alle Segmente (mit Zeitstempeln) in eine kombinerte Datei schreiben
@@ -61,5 +61,5 @@ for filename in os.listdir(folder_path):
         
         end_time = time.time()
         elapsed = end_time - start_time
-        print(f"Transkription abgeschlossen in {elapsed:.2f} Sekunden.")
-        print(f"Ausgabe gespeichert in: {output_txt_path}")
+        print(f"Transcription finished in {elapsed:.2f} seconds.")
+        print(f"Output saved to: {output_txt_path}")

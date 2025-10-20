@@ -1,18 +1,18 @@
 # veco.py
 # -----------------------------------------------------------------------------
-# VeCo – Stand-alone Vektorisierer & RAG-Retrieval
+# VeCo - Stand-alone vectorizer and RAG retrieval toolkit
 #
-# - JSON als Fallback-Speicher (keine Installation nötig)
-# - Optional: externe Storages (SQLite/Mongo) via separater "storages.py"
+# - JSON fallback storage (no additional service required)
+# - Optional external storage (SQLite/Mongo) via the separate "storages.py" module
 # - Fixes/Features:
-#     * Korrekte FAISS-IDs (keine 0er-IDs mehr)
-#     * Chunking mit Overlap (≈ 500–700 Tokens, char-basiert, satzsensitiv)
-#     * Summaries werden zusätzlich gespeichert (nicht als Embedding-Basis)
-#     * RAG-Query mit Ollama: query(database, frage, llm_model, ...)
-#     * Saubere, relative Pfadbehandlung (keine absoluten User-Pfade)
-#     * OPTIONAL: Speaker Diarization (via externem Modul veco_diarization.py)
-#     * OPTIONAL: CNN Bild-Erkennung (torchvision) + Caption via externem Modul veco_pic_describe
-#     * AUTO-Heuristik: maximale sinnvolle Pipeline je Dateityp, falls nichts explizit gesetzt
+#     * Correct FAISS IDs (no more zero IDs)
+#     * Overlapping chunking (~500-700 tokens, character based, sentence aware)
+#     * Summaries are stored separately (never used as embedding input)
+#     * RAG query helper with Ollama: query(database, question, llm_model, ...)
+#     * Consistent relative path handling (no user specific absolute paths)
+#     * OPTIONAL: Speaker diarization via the external veco_diarization.py module
+#     * OPTIONAL: CNN based image classification (torchvision) and optional captions via veco_pic_describe
+#     * AUTO heuristics choose the most sensible pipeline per file type when nothing is explicitly configured
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
@@ -81,20 +81,20 @@ def _require_dependency(module, name: str, import_error: Exception | None):
     """Raise a clear error if a mandatory dependency is missing."""
     if module is None:
         message = (
-            f"Die Bibliothek '{name}' wird für diese Funktion benötigt. "
-            "Bitte installiere die passende Abhängigkeit gemäß README/requirements."
+            f"The library '{name}' is required for this feature. "
+            "Please install the dependency as documented in the README/requirements."
         )
         if import_error is not None:
             raise RuntimeError(message) from import_error
         raise RuntimeError(message)
 
-# Optional: Ollama (nur wenn vorhanden/gewünscht)
+# Optional: Ollama integration (used only when available)
 try:
     import ollama
 except Exception:
     ollama = None
 
-# Optional: Vision – torchvision Klassifikation (ResNet50)
+# Optional: Vision - torchvision classification (ResNet50)
 try:
     import torchvision
     from torchvision import transforms
@@ -139,7 +139,7 @@ class FallbackSentenceEmbedder:
 
 # ---------------------------------- Spinner ----------------------------------
 class Spinner:
-    """Kleiner CLI-Spinner für längere Operationen (nicht kritisch, aber nett)."""
+    """Small CLI spinner for longer operations (purely cosmetic)."""
     spinner_cycle = ["|", "/", "-", "\\"]
 
     def __init__(self, message: str = "Processing"):
@@ -170,7 +170,7 @@ class Spinner:
             pass
 
 
-# ---------------------------- Hilfen / Utilities -----------------------------
+# ------------------------------ Helpers / Utilities ------------------------------
 def _try_import_storages():
     """Lazy-Import eines optionalen Moduls 'storages.py' (SQLite/Mongo-Backends)."""
     try:
@@ -196,20 +196,20 @@ def _try_import_pic_describe():
 
 
 def _relpath(p: str) -> str:
-    """Gibt Pfad p möglichst relativ zum aktuellen Arbeitsverzeichnis zurück."""
+    """Return path p relative to the current working directory whenever possible."""
     try:
         if os.path.isabs(p):
             return os.path.relpath(p, start=os.getcwd())
         return p
     except Exception:
-        return p  # Bei Problemen unverändert zurückgeben
+        return p  # Return unchanged if anything goes wrong
 
 
 def chunk_text(text: str, chunk_chars: int = 1800, overlap_chars: int = 200) -> List[str]:
     """
-    Char-basiertes Chunking mit Overlap (ohne zusätzliche Abhängigkeiten).
+    Character based chunking with overlap (no extra dependencies).
     - Versucht, bevorzugt an Satzenden ('.') zu schneiden.
-    - Richtwert: 1800 Zeichen ≈ 500–700 Tokens (je nach Sprache/Text).
+    - Rule of thumb: 1800 characters roughly equals 500-700 tokens (depending on language/text).
     """
     text = (text or "").strip()
     if not text:
@@ -231,16 +231,16 @@ def chunk_text(text: str, chunk_chars: int = 1800, overlap_chars: int = 200) -> 
     return chunks
 
 
-# --------------------------- Hauptklasse: Vectorize ---------------------------
+# --------------------------- Main Class: Vectorize ---------------------------
 class Vectorize:
     """
-    - Lädt/initialisiert Embedding- & ASR-Modelle
-    - Extrahiert Text aus Dateien (txt/pdf/docx/pptx/image/audio/video)
-    - Chunked, vektorisiert und indexiert (FAISS)
-    - Speichert Daten in JSON (Fallback) oder optionalen Backends (SQLite/Mongo)
-    - OPTIONAL: Speaker Diarization (externe Pipeline), Bild-Klassifikation (torchvision),
-                Bildbeschreibung (externes Modul veco_pic_describe)
-    - Bietet RAG-Retrieval + Ollama-basiertes Querying
+    - Loads/initialises embedding and ASR models
+    - Extracts text from files (txt/pdf/docx/pptx/image/audio/video)
+    - Chunks, embeds, and indexes content (FAISS)
+    - Stores data in JSON (fallback) or optional backends (SQLite/MongoDB)
+    - OPTIONAL: Speaker diarization (external pipeline), image classification (torchvision),
+                image captioning (external veco_pic_describe module)
+    - Provides RAG retrieval plus Ollama-powered querying
     """
 
     def __init__(
@@ -263,19 +263,19 @@ class Vectorize:
         _require_dependency(IndexFlatL2, "faiss-cpu", _FAISS_IMPORT_ERROR)
         _require_dependency(IndexIDMap, "faiss-cpu", _FAISS_IMPORT_ERROR)
 
-        # Basiskonfiguration
+        # Base configuration
         self.default_model = default_model
         self.preload_json_path = _relpath(preload_json_path or "vector_db.json")
         self.write_through = write_through
 
-        # Interner Speicher (für Fallback & schnelles Save/Load)
+        # Internal storage (for the JSON fallback and quick save/load)
         self.outputdb: List[Dict[str, Any]] = []
         self.id_lookup: Dict[int, Dict[str, Any]] = {}
         self._next_vector_id = 0
         self._next_doc_id = 0
         self._active_db: Optional[str] = None
 
-        # Optionales externes Storage (SQLite/Mongo)
+        # Optional external storage (SQLite/Mongo)
         self._ext_storage = None
         if storage is not None:
             self._ext_storage = storage
@@ -289,9 +289,9 @@ class Vectorize:
                 else:
                     raise ValueError(f"Unbekanntes storage_kind: {storage_kind}")
             else:
-                logger.warning("storages.py nicht gefunden – bleibe beim JSON-Fallback.")
+                logger.warning("storages.py not found - staying with the JSON fallback.")
 
-        # Modelle laden (Whisper + SBERT, optional Ollama-Check)
+        # Load models (Whisper + SBERT, optionally check Ollama)
         self._audio_requested = enable_audio
         self._audio_available = False
         self.whisper_model = None
@@ -310,23 +310,23 @@ class Vectorize:
         finally:
             spinner.stop()
 
-        # Vision (optional) – Lazy Init Handles
+        # Vision (optional) - lazy init handles
         self._vision_cls = None  # torchvision resnet50
-        self._vision_tf = None   # zugehörige Transforms
+        self._vision_tf = None   # associated transforms
 
-        # Bootstrap: vorhandene Daten laden (Storage bevorzugt, sonst JSON)
+        # Bootstrap: load existing data (prefer storage, otherwise JSON)
         if self._ext_storage is not None:
             self._bootstrap_from_storage()
         else:
             self.load_database()
 
-    # ---------------------- Infrastruktur / I/O ------------------------
+    # ---------------------- Infrastructure / I/O ------------------------
     def check_ollama_models(self):
-        """Nur zum Prüfen, ob Ollama erreichbar ist – kein harter Fehler."""
+        """Only checks whether Ollama is reachable - never raises fatal errors."""
         try:
             _ = ollama.list()
         except Exception:
-            logger.info("Ollama nicht verfügbar – LLM-Kompression/RAG-Antwort ggf. deaktiviert.")
+            logger.info("Ollama not available - LLM compression/RAG answer disabled.")
 
     @property
     def audio_available(self) -> bool:
@@ -352,7 +352,7 @@ class Vectorize:
             return "video"
         return "text"
 
-    # -------------------------- Extraktion ----------------------------
+    # --------------------------- Extraction ----------------------------
     def extract_text(self, inputfile: str, input_type: str) -> str:
         """Extrahiert Text aus Text/PDF/Word/PPTX-Dateien."""
         if input_type == "text":
@@ -394,10 +394,10 @@ class Vectorize:
         return f"[AUDIO transcription unavailable: {name}]"
 
     def extract_text_from_audio(self, inputfile: str) -> str:
-        """ASR via Whisper-Modell (erzwungen Deutsch; bei Bedarf anpassbar)."""
+        """ASR via Whisper model (forced German; adjust as needed)."""
         if not self.audio_available or self.whisper_model is None:
             logger.info(
-                "Audio-Transkription nicht verfügbar – verwende Platzhalter für %s.",
+                "Audio transcription not available - using placeholder for %s.",
                 _relpath(str(inputfile)),
             )
             return self._audio_placeholder(inputfile)
@@ -408,13 +408,13 @@ class Vectorize:
 
     def extract_text_from_video(self, inputfile: str) -> str:
         """
-        Einfache Videoverarbeitung:
-        - Audio extrahieren -> temporäre WAV im aktuellen Ordner
-        - Whisper-Transkription
+        Simple video processing:
+        - Extract audio -> temporary WAV in the current directory
+        - Whisper transcription
         """
         _require_dependency(VideoFileClip, "moviepy", _MOVIEPY_IMPORT_ERROR)
         base = Path(inputfile).stem
-        tmp_wav = f"{base}.veco_tmp.wav"  # relativ, kein User-Home-Pfad
+        tmp_wav = f"{base}.veco_tmp.wav"  # relative path, avoids user home directory
         clip = VideoFileClip(inputfile)
         text = ""
         try:
@@ -439,13 +439,13 @@ class Vectorize:
     # ----------------------- OPTIONAL: Diarization ---------------------
     def _run_diarization(self, inputfile: str, diarization_kwargs: Optional[dict] = None) -> Optional[str]:
         """
-        Führt (wenn verfügbar) deine externe Diarization-Pipeline aus:
+        Runs your external diarization pipeline when available:
         - erwartet ein Modul 'veco_diarization.py' mit 'run_file' und 'build_config'
-        - gibt einen Speaker-getaggten Text zurück oder None bei Fehler/fehlendem Modul
+        - returns speaker-tagged text or None when the module fails/is missing
         """
         dia = _try_import_diarization()
         if dia is None:
-            logger.info("Diarization-Modul (veco_diarization.py) nicht gefunden – überspringe.")
+            logger.info("Diarization module (veco_diarization.py) not found - skipping.")
             return None
 
         with tempfile.TemporaryDirectory(prefix="veco_dia_") as tmpdir:
@@ -464,7 +464,7 @@ class Vectorize:
         if self._vision_cls is not None:
             return
         if not _VISION_OK:
-            logger.info("torchvision nicht verfügbar – Bildklassifikation wird übersprungen.")
+            logger.info("torchvision not available - skipping image classification.")
             return
         try:
             weights = torchvision.models.ResNet50_Weights.DEFAULT
@@ -472,7 +472,7 @@ class Vectorize:
             self._vision_cls.eval()
             self._vision_tf = weights.transforms()
         except Exception:
-            # Fallback auf einfache Normalisierung/Resize
+            # Fallback to simple normalisation/resize
             self._vision_cls = torchvision.models.resnet50(pretrained=True)
             self._vision_cls.eval()
             self._vision_tf = transforms.Compose([
@@ -514,7 +514,7 @@ class Vectorize:
         """
         mod = _try_import_pic_describe()
         if mod is None:
-            logger.info("veco_pic_describe nicht gefunden – Bildbeschreibung wird übersprungen.")
+            logger.info("veco_pic_describe not found - skipping image captioning.")
             return None
         try:
             if hasattr(mod, "describe") and callable(mod.describe):
@@ -532,7 +532,7 @@ class Vectorize:
 
     # ----------------------- Embedding & Index -------------------------
     def embed_texts(self, texts: List[str]) -> np.ndarray:
-        """Batch-Embedding für eine Liste von Strings (returns float32 ndarray)."""
+        """Batch embedding for a list of strings (returns a float32 ndarray)."""
         if not texts:
             dim = self.embedder.get_sentence_embedding_dimension()
             return np.zeros((0, dim), dtype=np.float32)
@@ -589,41 +589,41 @@ class Vectorize:
 
     def _add_records(self, vectors: np.ndarray, chunks: List[str], source: str, doc_id: int):
         """
-        Fügt Chunks + Embeddings in Index & DB ein – mit korrekten FAISS-IDs.
+        Insert chunks and embeddings into the index/database with consistent FAISS IDs.
         - vectors: (N, dim)
-        - chunks:  Liste der Chunk-Texte (N)
-        - source:  (relativer) Pfad zur Quelle
-        - doc_id:  logische Gruppierung (erste ID dieses Dokuments)
+        - chunks:  list of chunk texts (N)
+        - source:  relative path to the source
+        - doc_id:  logical grouping (first ID for this document)
         """
         assert vectors.shape[0] == len(chunks)
         ids = self._reserve_vector_ids(len(chunks))
         if ids.size == 0:
             return
 
-        # FAISS: Embeddings mit expliziten IDs hinzufügen
+        # FAISS: add embeddings with explicit IDs
         self.faiss_index.add_with_ids(vectors, ids)
 
-        # Records bauen & persistieren (in-memory + optional extern)
+        # Build records and persist (in-memory plus optional external storage)
         src = _relpath(source)
         for local_idx, (rid, chunk, vec) in enumerate(zip(ids.tolist(), chunks, vectors)):
             rec: Dict[str, Any] = {
                 "id": int(rid),
                 "doc_id": int(doc_id),
                 "chunk_idx": local_idx,
-                "text": chunk,              # Embedding-Basis = Original-Chunk
-                "source": src,              # relative Quelle
-                "vector": vec.tolist(),     # nützlich für Re-Index/Laden
+                "text": chunk,              # Embedding base = original chunk
+                "source": src,              # relative source
+                "vector": vec.tolist(),     # useful for re-index/load
             }
             self.outputdb.append(rec)
             self.id_lookup[int(rid)] = rec
             if self._ext_storage is not None and self.write_through:
                 self._ext_storage.upsert(rec)
 
-    # --------------------------- Persistenz ----------------------------
+    # --------------------------- Persistence ----------------------------
     def save_database(self, json_path: Optional[str] = None):
         """
-        JSON-Fallback: schreibt self.outputdb in eine JSON-Datei.
-        Wenn externes Storage aktiv & write_through=False: zusätzlich dorthin upserten.
+        JSON fallback: writes self.outputdb to a JSON file.
+        If an external storage backend is active and write_through=False, upsert there as well.
         """
         path = json_path or self.preload_json_path
         payload = {"outputdb": self.outputdb}
@@ -633,18 +633,18 @@ class Vectorize:
             for rec in self.outputdb:
                 self._ext_storage.upsert(rec)
 
-        logger.info(f"JSON gespeichert: {_relpath(str(path))}")
+        logger.info(f"JSON saved: {_relpath(str(path))}")
 
     def load_database(self, json_path: Optional[str] = None):
         """
-        JSON-Fallback laden und FAISS + id_lookup füllen.
-        Existiert die Datei nicht, wird leer gestartet (keine Exception).
+        Load the JSON fallback and populate FAISS plus id_lookup.
+        If the file does not exist we start empty (no exception).
         """
         self._reset_in_memory_state()
 
         path = json_path or self.preload_json_path
         if not Path(path).exists():
-            logger.info(f"Kein JSON vorhanden ({_relpath(str(path))}) – starte leer.")
+            logger.info(f"No JSON found ({_relpath(str(path))}) - starting empty.")
             return
 
         data = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -658,12 +658,12 @@ class Vectorize:
             if self.faiss_index.ntotal > before:
                 vector_cnt += 1
 
-        logger.info(f"JSON geladen: {vector_cnt} Vektoren in FAISS ({total_cnt} Datensätze).")
+        logger.info(f"JSON loaded: {vector_cnt} vectors in FAISS ({total_cnt} records).")
 
     def _bootstrap_from_storage(self):
         """
-        Daten aus externem Storage (SQLite/Mongo) laden und Index/Lookup füllen.
-        JSON bleibt unberührt.
+        Load data from external storage (SQLite/Mongo) and rebuild the index/lookup.
+        JSON remains untouched.
         """
         self._reset_in_memory_state()
 
@@ -678,7 +678,7 @@ class Vectorize:
                 vector_cnt += 1
 
         logger.info(
-            f"Storage geladen: {total_cnt} Datensätze, davon {vector_cnt} mit Embeddings."
+            f"Storage loaded: {total_cnt} records, {vector_cnt} with embeddings."
         )
 
     def _switch_database(self, database: str):
@@ -691,14 +691,14 @@ class Vectorize:
         """
         db = (database or "").strip()
 
-        # Bereits aktiv? Dann no-op.
+        # Already active? Then do nothing.
         if getattr(self, "_active_db", None) == db:
             return
 
-        # Index & Caches resetten
+        # Reset index and caches
         self._reset_in_memory_state()
 
-        # Externes Storage ggf. schließen
+        # Close external storage if necessary
         if self._ext_storage is not None:
             try:
                 self._ext_storage.close()
@@ -706,12 +706,12 @@ class Vectorize:
                 pass
         self._ext_storage = None
 
-        # Routing nach Schema/Endung
+        # Route based on scheme/extension
         lower = db.lower()
         stor_mod = _try_import_storages()
 
         if lower.endswith(".json") or lower == "":
-            # JSON-Fallback
+            # JSON fallback
             self.preload_json_path = db if db else self.preload_json_path
             self.load_database(self.preload_json_path)
             self._active_db = db
@@ -720,7 +720,7 @@ class Vectorize:
 
         if lower.endswith(".sqlite") or lower.endswith(".db"):
             if stor_mod is None:
-                raise RuntimeError("SQLite verlangt 'storages.py'. Bitte bereitstellen.")
+                raise RuntimeError("SQLite requires 'storages.py'. Please provide it.")
             self._ext_storage = stor_mod.SqliteStorage(db_path=db)
             self._bootstrap_from_storage()
             self._active_db = db
@@ -729,7 +729,7 @@ class Vectorize:
 
         if lower.startswith("mongodb://") or lower.startswith("mongodb+srv://"):
             if stor_mod is None:
-                raise RuntimeError("Mongo verlangt 'storages.py'. Bitte bereitstellen.")
+                raise RuntimeError("MongoDB requires 'storages.py'. Please provide it.")
             self._ext_storage = stor_mod.MongoStorage(uri=db, db_name="veco_db", collection="entries")
             self._bootstrap_from_storage()
             self._active_db = db
@@ -739,7 +739,7 @@ class Vectorize:
         raise ValueError(f"Unbekanntes database-Format: {database}")
 
     def close(self):
-        """Aufräumen (externes Storage sauber schließen)."""
+        """Cleanup (close external storage cleanly)."""
         if self._ext_storage is not None:
             try:
                 self._ext_storage.close()
@@ -749,41 +749,41 @@ class Vectorize:
     # ------------------------ LLM / Summarization ----------------------
     def build_compression_prompt(self, text: str) -> str:
         return (
-            "Fasse den folgenden Text prägnant als Executive Summary (5–8 Bullet Points) zusammen.\n\n"
+            "Summarise the following text as an executive summary (5-8 bullet points).\n\n"
             f"TEXT:\n{text}\n"
         )
 
     def ask_llm(self, prompt: str, model: Optional[str] = None) -> str:
         if ollama is None:
-            raise RuntimeError("Ollama nicht verfügbar.")
+            raise RuntimeError("Ollama not available.")
         m = model or self.default_model
         resp = ollama.generate(model=m, prompt=prompt)
         return (resp.get("response") or "").strip()
 
-    # ------------------------ Ingest / Vektorisierung ------------------
+    # ------------------------ Ingest / Vectorization ------------------
     def vectorize(
         self,
         inputfile: str,
         use_compression: bool = False,
         model: Optional[str] = None,
 
-        # AUTO-Heuristik:
+        # AUTO heuristic:
         use_diarization: Optional[bool] = None,   # None = AUTO, True/False = erzwingen
         diarization_kwargs: Optional[dict] = None,
 
-        vision_mode: Optional[str] = None,        # None = AUTO (für Bilder), "classify" | "caption" | "both" | ""
-        topk: int = 5,                            # für Bildklassifikation
-        pic_kwargs: Optional[dict] = None,        # optionale Parameter für veco_pic_describe
+        vision_mode: Optional[str] = None,        # None = AUTO (for images), "classify" | "caption" | "both" | ""
+        topk: int = 5,                            # for image classification
+        pic_kwargs: Optional[dict] = None,        # optional parameters for veco_pic_describe
     ):
         """
         Voller Ingest-Pipeline-Step:
-          1) Text extrahieren (Dateityp-abhängig). Falls use_diarization=True (nur Audio/Video):
+          1) Extract text (depends on file type). If use_diarization=True (audio/video only):
              -> Speaker-getaggte Transkription wird bevorzugt (wenn Modul vorhanden).
-          2) Für Bilder optional: CNN-Klassifikation und/oder externe Bildbeschreibung.
+          2) For images optionally run CNN classification and/or external captioning.
           3) Chunking mit Overlap
           4) Embedding (nur Original-Chunks)
           5) Index + Persistenz
-          6) Optional: Summarization (als separates Meta, nicht als Embedding-Basis)
+          6) Optional: Summarization (stored as metadata, never used as embedding input)
         """
         spinner = Spinner("Vectorizing input")
         spinner.start()
@@ -793,7 +793,7 @@ class Vectorize:
 
             raw_text = ""
 
-            # --- 1) Volltext (inkl. AUTO-Diarization für Audio/Video) ---
+            # --- 1) Full text (includes AUTO diarization for audio/video) ---
             if use_diarization is None:
                 use_diarization = (input_type in {"audio", "video"}) and (_try_import_diarization() is not None)
 
@@ -819,7 +819,7 @@ class Vectorize:
 
             raw_text = (raw_text or "").strip()
 
-            # --- 2) Vision-Extras (AUTO) – nur bei Bildern sinnvoll ---
+            # --- 2) Vision extras (AUTO) - only relevant for images ---
             vision_extra = ""
             if input_type == "image":
                 if vision_mode is None:
@@ -849,7 +849,7 @@ class Vectorize:
                     raw_text = (raw_text + "\n\n" if raw_text else "") + f"[VISION]\n{vision_extra}"
 
             if not raw_text:
-                logger.warning("Kein Text extrahiert.")
+                logger.warning("No text extracted.")
                 return
 
             # 3) Chunking
@@ -857,16 +857,16 @@ class Vectorize:
             if not chunks:
                 chunks = [raw_text]
 
-            # 4) Embedding (nur Original-Chunks)
+            # 4) Embedding (original chunks only)
             vectors = self.embed_texts(chunks)
 
-            # 5) Doc-ID (Marker für Gruppierung; unabhängig von FAISS-IDs)
+            # 5) Doc ID (used for grouping; independent from FAISS IDs)
             doc_id = self._allocate_doc_id()
 
             # 6) Index + DB
             self._add_records(vectors, chunks, source=str(inputfile), doc_id=doc_id)
 
-            # 7) Optional: Summary (NICHT als Embedding-Basis)
+            # 7) Optional: Summary (never used as embedding input)
             if use_compression:
                 try:
                     summary = self.ask_llm(self.build_compression_prompt(raw_text), model or self.default_model)
@@ -876,7 +876,7 @@ class Vectorize:
 
                 if summary:
                     meta = {
-                        "id": int(10_000_000_000 + doc_id),  # große ID außerhalb FAISS
+                        "id": int(10_000_000_000 + doc_id),  # large ID outside the FAISS range
                         "doc_id": int(doc_id),
                         "chunk_idx": -1,
                         "kind": "doc_summary",
@@ -892,7 +892,7 @@ class Vectorize:
 
     # --------------------------- Retrieval / RAG -----------------------
     def retrieve_context(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
-        """Sucht die top_k ähnlichsten Chunks zu einer Query (Embedding + FAISS)."""
+        """Find the top_k most similar chunks for a query (embedding + FAISS)."""
         qv = self.embed_texts([query])
         if self.faiss_index.ntotal == 0:
             return []
@@ -908,8 +908,8 @@ class Vectorize:
 
     def query_with_context(self, question: str, top_k: int = 5, include_summary: bool = True) -> Dict[str, Any]:
         """
-        Liefert Kontext-Chunks + (optional) Doc-Summaries – ohne LLM-Antwort.
-        Nützlich zum Debuggen der Retrieval-Ergebnisse.
+        Return context chunks plus (optional) document summaries - no LLM answer.
+        Useful for debugging retrieval results.
         """
         ctx = self.retrieve_context(question, top_k=top_k)
         response: Dict[str, Any] = {"question": question, "contexts": ctx}
@@ -926,55 +926,55 @@ class Vectorize:
 
     def _build_rag_prompt(
         self,
-        frage: str,
+        question: str,
         contexts: List[Dict[str, Any]],
         summaries: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
-        """Baut einen robusten, deutschsprachigen RAG-Prompt für Ollama."""
+        """Build a robust German RAG prompt for Ollama."""
         ctx_text = "\n\n".join(c.get("text", "") for c in contexts if c.get("text"))
         sum_text = ""
         if summaries:
             only = [s.get("summary", "") for s in summaries if s.get("summary")]
             if only:
-                sum_text = "\n\nZUSAMMENFASSUNG (Dokumentebene):\n" + "\n".join(only)
+                sum_text = "\n\nSUMMARY (document level):\n" + "\n".join(only)
 
-        prompt = f"""Beantworte die Frage ausschließlich auf Basis des folgenden Kontexts.
-Wenn die Antwort nicht eindeutig im Kontext steht, sage: "Im gegebenen Kontext nicht enthalten."
+        prompt = f"""Answer the question strictly based on the following context.
+If the answer is not clearly grounded in the context, respond with "Not available in the provided context."
 
-KONTEXT:
+CONTEXT:
 {ctx_text}
 {sum_text}
 
-FRAGE:
-{frage}
+QUESTION:
+{question}
 
-ANTWORT (präzise, deutsch):
+ANSWER (concise, German):
 """
         return prompt
 
     def query(
         self,
         database: str,
-        frage: str,
+        question: str,
         llm_model: str,
         top_k: int = 5,
         include_summary: bool = True,
     ) -> Dict[str, Any]:
         """
         High-level RAG-Query (End-to-End):
-          - database: Pfad zu JSON / SQLite (.sqlite/.db) oder Mongo-URI (mongodb://…)
-          - frage:    Nutzerfrage
-          - llm_model: Ollama-Modellname (z. B. "gemma3:12b")
-          - top_k:    Anzahl der Kontext-Chunks
+          - database: Path to JSON / SQLite (.sqlite/.db) or Mongo URI (mongodb://...)
+          - question: user question
+          - llm_model: Ollama model name (e.g., "gemma3:12b")
+          - top_k:    number of context chunks
         """
         if ollama is None:
-            raise RuntimeError("Ollama nicht verfügbar – bitte installieren/konfigurieren.")
+            raise RuntimeError("Ollama not available - please install/configure it.")
 
-        # 1) Datenbank wählen/laden
+        # 1) Choose/load database
         self._switch_database(database)
 
-        # 2) Kontext
-        contexts = self.retrieve_context(frage, top_k=top_k)
+        # 2) Context
+        contexts = self.retrieve_context(question, top_k=top_k)
 
         # 3) Summaries (optional)
         summaries: List[Dict[str, Any]] = []
@@ -986,17 +986,17 @@ ANTWORT (präzise, deutsch):
                 if rec.get("kind") == "doc_summary" and rec.get("doc_id") in doc_ids
             ]
 
-        # 4) Prompt bauen und LLM fragen
-        prompt = self._build_rag_prompt(frage, contexts, summaries)
+        # 4) Build prompt and call the LLM
+        prompt = self._build_rag_prompt(question, contexts, summaries)
         try:
             resp = ollama.generate(model=llm_model, prompt=prompt)
             answer = (resp.get("response") or "").strip()
         except Exception as e:
-            raise RuntimeError(f"Ollama-Fehler: {e}")
+            raise RuntimeError(f"Ollama error: {e}")
 
-        # 5) Ergebnis zurückgeben (mit Quellenliste)
+        # 5) Return result (with source list)
         result = {
-            "question": frage,
+            "question": question,
             "model": llm_model,
             "answer": answer,
             "contexts": contexts,
@@ -1011,23 +1011,23 @@ ANTWORT (präzise, deutsch):
 if __name__ == "__main__":
     import argparse
 
-    ap = argparse.ArgumentParser(description="VeCo – Vectorize & RAG Retrieval")
+    ap = argparse.ArgumentParser(description="VeCo - Vectorize & RAG Retrieval")
     ap.add_argument("input", nargs="?", help="Datei (txt/pdf/docx/pptx/image/audio/video)")
-    ap.add_argument("--compress", action="store_true", help="Zusammenfassung zusätzlich speichern")
+    ap.add_argument("--compress", action="store_true", help="Store generated summary alongside the document")
     ap.add_argument("--json", default="vector_db.json", help="JSON-Fallback-Datei")
     ap.add_argument("--use-sqlite", default=None, help="Pfad zu SQLite DB (optional)")
     ap.add_argument("--use-mongo", default=None, help="Mongo URI (optional, z.B. mongodb://localhost:27017)")
     ap.add_argument("--mongo-db", default="veco_db", help="Mongo DB-Name (nur CLI-Demo)")
     ap.add_argument("--mongo-col", default="entries", help="Mongo Collection (nur CLI-Demo)")
-    # Optional: explizit Vision steuern (leer string, classify, caption, both)
+    # Optional: control vision explicitly (empty string, classify, caption, both)
     ap.add_argument("--vision", default=None, help="Bildmodus: classify|caption|both|'' (None=AUTO)")
-    ap.add_argument("--topk", type=int, default=5, help="Top-K Klassen für Bildklassifikation")
-    # Optional: explizit Diarization steuern (None=AUTO; true/false erzwingt)
+    ap.add_argument("--topk", type=int, default=5, help="Top-K classes for image classification")
+    # Optional: control diarization explicitly (None=AUTO; true/false to force)
     ap.add_argument("--diarize", default=None, choices=["true", "false"], help="Diarization erzwingen (true/false). None=AUTO")
 
     args = ap.parse_args()
 
-    # Optionales Storage fürs Ingest (CLI-Demo)
+    # Optional external storage for ingestion (CLI demo)
     storage_kind = None
     storage_kwargs = None
     if args.use_sqlite:
@@ -1044,7 +1044,7 @@ if __name__ == "__main__":
         write_through=True,
     )
 
-    # CLI → Mapping auf None/Bool
+    # CLI -> map command line flags to None/bools
     diarize_flag: Optional[bool]
     if args.diarize is None:
         diarize_flag = None  # AUTO
@@ -1056,17 +1056,17 @@ if __name__ == "__main__":
             args.input,
             use_compression=args.compress,
             use_diarization=diarize_flag,   # None=AUTO
-            diarization_kwargs=None,         # bei Bedarf mit Parametern befüllen
+            diarization_kwargs=None,         # populate with parameters if needed
             vision_mode=args.vision,         # None=AUTO
             topk=args.topk,
         )
         veco.save_database(args.json)
 
-        # Kurzer Retrieval-Test (ohne LLM)
-        res = veco.query_with_context("Worum geht es im Dokument?", top_k=5, include_summary=True)
+        # Quick retrieval test (without LLM)
+        res = veco.query_with_context("What is the document about?", top_k=5, include_summary=True)
         print(json.dumps(res, ensure_ascii=False, indent=2))
     else:
-        print("Kein Input übergeben. Beispiel:")
+        print("No input provided. Example:")
         print("  python veco.py docs/report.pdf --compress --json vector_db.json --use-sqlite data/veco.sqlite")
         print("  python veco.py sample.wav --diarize true --json vector_db.json")
         print("  python veco.py image.jpg --vision both --json vector_db.json")

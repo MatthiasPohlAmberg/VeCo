@@ -4,7 +4,7 @@ from pathlib import Path
 import pdfplumber
 import ollama
 
-# Verzeichnisse
+# Directories
 INPUT_DIR = Path(r"C:\Users\MatthiasPohl\Desktop\KI\data_extract\Eingabe")
 OUTPUT_DIR = Path(r"C:\Users\MatthiasPohl\Desktop\KI\data_extract\Ausgabe")
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -35,24 +35,26 @@ def ask_gemma(content, images=None):
 def build_prompt(doc_text=None):
     if doc_text:
         return (
-            "Bitte extrahiere den Inhalt aus folgendem Dokumenttext. "
-            "Dokumentinhalt:\n\"\"\"\n" + doc_text[:8000] + "\n\"\"\""
+            "Please extract the content from the following document text. "
+            "Document content:\n"""
+" + doc_text[:8000] + "
+""""
         )
     else:
         return (
-            "Bitte extrahiere den vollständigen Textinhalt aus diesem Bild. "
-            "Ignoriere Artefakte"
+            "Please extract the full textual content from this image. "
+            "Ignore artefacts"
         )
 
 def process_file(filepath: Path):
     ext = filepath.suffix.lower()
     output_path = OUTPUT_DIR / (filepath.stem + ".txt")
 
-    print(f">> Verarbeite: {filepath.name}")
+    print(f">> Processing: {filepath.name}")
     t0 = time.perf_counter()
 
     try:
-        # Step 1: OCR / Textvorbereitung
+        # Step 1: OCR / text preparation
         t1 = time.perf_counter()
         if ext in SUPPORTED_IMAGE_EXTS:
             encoded_image = encode_image_base64(filepath)
@@ -66,36 +68,36 @@ def process_file(filepath: Path):
             prompt = build_prompt(raw_text)
             encoded_image = None
         else:
-            print(f"Nicht unterstützter Dateityp: {filepath.name}")
+            print(f"Unsupported file type: {filepath.name}")
             return
         t2 = time.perf_counter()
         
-        # Step 2: LLM ansprechen
+        # Step 2: Call the LLM
         result = ask_gemma(prompt, images=[encoded_image] if encoded_image else None)
         t3 = time.perf_counter()
 
-        # Step 3: Schreiben
+        # Step 3: Write output
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(result)
         t4 = time.perf_counter()
 
-        print(f"OCR/Extraktion: {t2 - t1:.2f}s")
+        print(f"OCR/extraction: {t2 - t1:.2f}s")
         print(f" LLM (gemma): {t3 - t2:.2f}s")
-        print(f" Schreiben: {t4 - t3:.2f}s")
-        print(f"Gespeichert: {output_path.name}")
+        print(f" Writing: {t4 - t3:.2f}s")
+        print(f"Saved: {output_path.name}")
 
     except Exception as e:
-        print(f"Fehler bei {filepath.name}: {e}")
+        print(f"Error processing {filepath.name}: {e}")
 
     finally:
-        print(f"Gesamt: {time.perf_counter() - t0:.2f}s\n")
+        print(f"Total: {time.perf_counter() - t0:.2f}s\n")
 
 def main():
     overall_start = time.perf_counter()
     for file in INPUT_DIR.iterdir():
         if file.is_file():
             process_file(file)
-    print(f"Gesamtzeit: {time.perf_counter() - overall_start:.2f} Sekunden")
+    print(f"Total runtime: {time.perf_counter() - overall_start:.2f} seconds")
 
 if __name__ == "__main__":
     main()

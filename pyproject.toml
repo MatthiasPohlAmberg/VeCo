@@ -8,11 +8,24 @@ version = "0.1.0"
 description = "Vectorization & RAG Toolkit"
 readme = "README.md"
 requires-python = ">=3.10,<3.12"
-authors = [{ name = "Dein Name", email = "you@example.com" }]
+license = "CC0-1.0"
+authors = [{ name = "Matthias Pohl" }]
+keywords = ["rag", "vector database", "embeddings", "multimodal", "process mining"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
 
-# Kern-Abhängigkeiten (NumPy 2.2.6 + kompatible Pins)
+# Core dependencies (NumPy 2.2.6 + compatible pins)
 dependencies = [
-  # Numerics & Core ML
+  # Numerics & core ML
   "numpy>=1.24,<2.0",
   "scipy>=1.10,<1.12",
   "torch>=2.1,<2.3",
@@ -20,7 +33,7 @@ dependencies = [
   "torchvision>=0.16,<0.18",
   "sentence-transformers>=2.2,<3.0",
 
-  # Vector DB & Media
+  # Vector DB & media
   "faiss-cpu>=1.7.4,<1.8",
   "moviepy>=1.0.3,<2.0",
 
@@ -33,7 +46,7 @@ dependencies = [
   "soundfile>=0.12,<0.13",
   "webrtcvad-wheels>=2.0.10,<2.1",
 
-  # Vision / OCR / Imaging
+  # Vision / OCR / imaging
   "pytesseract>=0.3.10,<0.4",
   "Pillow>=10.2,<11",
 
@@ -60,6 +73,11 @@ pic-describe = [
   "sentencepiece>=0.1.99,<0.2",
   "sacremoses>=0.0.53,<0.1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/MatthiasPohlAmberg/VeCo"
+Source = "https://github.com/MatthiasPohlAmberg/VeCo"
+Issues = "https://github.com/MatthiasPohlAmberg/VeCo/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
