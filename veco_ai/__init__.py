@@ -1,6 +1,6 @@
-# VeCo/__init__.py
+# veco_ai/__init__.py
 """
-VeCo package initializer.
+veco-ai package initializer.
 
 - Avoids circular imports.
 - Exposes the public API (Vectorize).

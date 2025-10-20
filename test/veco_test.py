@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from VeCo import Vectorize
+from veco_ai import Vectorize
 
 
 def main() -> None:

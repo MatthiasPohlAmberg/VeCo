@@ -81,4 +81,4 @@ Issues = "https://github.com/MatthiasPohlAmberg/VeCo/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["VeCo*"]
+include = ["veco_ai*"]

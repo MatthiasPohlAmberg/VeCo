@@ -1,6 +1,6 @@
-# VeCo
+# veco-ai
 
-VeCo-ai is a Python toolkit (Python 3.10-3.11) that converts a broad range of document types - text, PDF, Word, PowerPoint, images, audio, and video - into vector representations that can be queried through Retrieval Augmented Generation (RAG).  
+veco-ai is a Python toolkit (Python 3.10-3.11) that converts a broad range of document types - text, PDF, Word, PowerPoint, images, audio, and video - into vector representations that can be queried through Retrieval Augmented Generation (RAG).  
 Embeddings are stored inside a FAISS index and can optionally be persisted to JSON (fallback), SQLite, or MongoDB. The integrated RAG interface lets you query knowledge bases via local **Ollama** models.
 
 ## Features
@@ -22,13 +22,12 @@ Embeddings are stored inside a FAISS index and can optionally be persisted to JS
 
 ```
 .
-|-- VeCo/
+|-- veco_ai/
 |   |-- __init__.py
 |   |-- veco.py              # Core vectorization library
 |   |-- veco_diarization.py  # Optional speaker diarization pipeline
-|   |-- storages.py (opt.)   # Optional SQLite/MongoDB backends
-|   `-- veco_pic_describe/   # Optional image captioning helpers
-|-- tests/
+|   `-- veco_pic_describe.py # Optional image captioning helpers
+|-- test/
 |   `-- veco_test.py         # Example usage script
 |-- requirements.txt
 |-- pyproject.toml / setup.py
@@ -68,12 +67,14 @@ source .venv/bin/activate   # Linux/macOS
 ### 2. Install the base dependencies
 
 ```bash
-pip install -r requirements.txt
+pip install veco-ai
 ```
 
-or use the `pyproject.toml`:
+For local development instead of the published wheel, install from source:
 
 ```bash
+pip install -r requirements.txt
+# or
 pip install .
 ```
 
@@ -95,7 +96,7 @@ The script loads or creates `vector_db.json`, vectorizes all files in the `test_
 ### Direct usage in Python
 
 ```python
-from VeCo import Vectorize
+from veco_ai import Vectorize
 
 # JSON fallback backend
 veco = Vectorize(preload_json_path="vector_db.json")

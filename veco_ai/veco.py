@@ -1,6 +1,6 @@
 # veco.py
 # -----------------------------------------------------------------------------
-# VeCo - Stand-alone vectorizer and RAG retrieval toolkit
+# veco-ai - Stand-alone vectorizer and RAG retrieval toolkit
 #
 # - JSON fallback storage (no additional service required)
 # - Optional external storage (SQLite/Mongo) via the separate "storages.py" module
@@ -1011,7 +1011,7 @@ ANSWER (concise, German):
 if __name__ == "__main__":
     import argparse
 
-    ap = argparse.ArgumentParser(description="VeCo - Vectorize & RAG Retrieval")
+    ap = argparse.ArgumentParser(description="veco-ai - Vectorize & RAG Retrieval")
     ap.add_argument("input", nargs="?", help="Datei (txt/pdf/docx/pptx/image/audio/video)")
     ap.add_argument("--compress", action="store_true", help="Store generated summary alongside the document")
     ap.add_argument("--json", default="vector_db.json", help="JSON-Fallback-Datei")
