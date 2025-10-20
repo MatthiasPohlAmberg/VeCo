@@ -59,6 +59,8 @@ Embeddings are stored inside a FAISS index and can optionally be persisted to JS
 ### 1. Create a virtual environment
 
 ```bash
+./setup_venv.ps1
+# or
 python3.11 -m venv .venv
 .venv\Scripts\activate      # Windows
 source .venv/bin/activate   # Linux/macOS
@@ -67,7 +69,7 @@ source .venv/bin/activate   # Linux/macOS
 ### 2. Install the base dependencies
 
 ```bash
-pip install veco-ai
+pip install veco_ai
 ```
 
 For local development instead of the published wheel, install from source:
@@ -75,7 +77,7 @@ For local development instead of the published wheel, install from source:
 ```bash
 pip install -r requirements.txt
 # or
-pip install .
+pip install -e .
 ```
 
 ### 3. Configure PyTorch (optional)
